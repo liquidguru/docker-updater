@@ -242,10 +242,9 @@ def apply_update(container_name: str) -> None:
         emit("▶ Recreating container...")
 
         network_mode = hcfg.get("NetworkMode", "bridge")
-        extra_nets = {
+        all_nets = {
             net_name: client.api.create_endpoint_config(aliases=net_data.get("Aliases") or [])
             for net_name, net_data in nets.items()
-            if net_name != network_mode
         }
 
         hc = client.api.create_host_config(
@@ -267,7 +266,7 @@ def apply_update(container_name: str) -> None:
             tmpfs=hcfg.get("Tmpfs"),
         )
 
-        nc = client.api.create_networking_config(extra_nets) if extra_nets else None
+        nc = client.api.create_networking_config(all_nets) if all_nets else None
         new_c = client.api.create_container(
             image=image_name, name=container_name,
             hostname=cfg.get("Hostname", ""), user=cfg.get("User", ""),
