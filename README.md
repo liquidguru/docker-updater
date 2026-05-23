@@ -6,6 +6,8 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 ---
 
+![docker-updater dashboard](screenshot.jpeg)
+
 ## Features
 
 - **Registry polling** — compares local image digests against the registry without pulling, using the Docker Registry v2 manifest API (`HEAD` + `Docker-Content-Digest`)
