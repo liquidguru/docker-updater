@@ -12,5 +12,7 @@ services:
       - ./app.py:/app/app.py:ro
       - ./templates:/app/templates:ro
     environment:
-      - CHECK_INTERVAL_HOURS=12
+      - CHECK_TIME=03:00
+      - TIMEZONE=Australia/Melbourne
+      - NOTIFY_URL=ntfy://ntfy.sh/liquidguru-docker
       - DOCKER_HOST=unix:///var/run/docker.sock

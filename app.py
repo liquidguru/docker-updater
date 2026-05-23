@@ -9,6 +9,7 @@ import os
 import re
 import threading
 
+import apprise
 import docker
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -18,7 +19,9 @@ app = Flask(__name__)
 
 DATA_DIR = "/app/data"
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
-CHECK_INTERVAL_HOURS = int(os.environ.get("CHECK_INTERVAL_HOURS", "12"))
+CHECK_TIME = os.environ.get("CHECK_TIME", "03:00")
+TIMEZONE   = os.environ.get("TIMEZONE", "Australia/Melbourne")
+NOTIFY_URL = os.environ.get("NOTIFY_URL", "")
 
 _state_lock = threading.Lock()
 _check_running = False
@@ -43,6 +46,20 @@ def save_state(state: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2, default=str)
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+def send_notification(title: str, body: str) -> None:
+    if not NOTIFY_URL:
+        return
+    try:
+        a = apprise.Apprise()
+        a.add(NOTIFY_URL)
+        a.notify(title=title, body=body)
+        print(f"[notify] Sent: {title}")
+    except Exception as e:
+        print(f"[notify] Failed: {e}")
 
 
 # ── Registry helpers ──────────────────────────────────────────────────────────
@@ -159,8 +176,17 @@ def check_for_updates() -> None:
             state["available"] = available
             state["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
             save_state(state)
-        count = sum(1 for v in available.values() if v["has_update"])
+
+        updates = [n for n, v in available.items() if v["has_update"]]
+        count = len(updates)
         print(f"[checker] Done — {count} update(s) available.")
+
+        if count > 0:
+            send_notification(
+                title=f"Docker: {count} update{'s' if count > 1 else ''} available",
+                body=", ".join(sorted(updates)),
+            )
+
     except Exception as e:
         print(f"[checker] Fatal error: {e}")
     finally:
@@ -276,7 +302,6 @@ def apply_update(container_name: str) -> None:
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 def _github_repo_from_labels(labels: dict) -> str | None:
-    """Extract a github owner/repo slug from image labels."""
     for key in ("org.opencontainers.image.source", "org.opencontainers.image.url"):
         url = labels.get(key, "")
         m = re.match(r"https?://github\.com/([^/]+/[^/\s]+?)(?:\.git)?/?$", url)
@@ -395,6 +420,7 @@ def api_status():
         "last_check": state.get("last_check"),
         "check_running": _check_running,
         "history": state.get("history", [])[:20],
+        "next_check": _next_check_time(),
     })
 
 
@@ -449,11 +475,35 @@ def api_changelog(name):
         return jsonify({"error": str(e), "releases": []}), 500
 
 
+# ── Scheduler helpers ─────────────────────────────────────────────────────────
+
+_scheduler: BackgroundScheduler | None = None
+
+
+def _next_check_time() -> str | None:
+    if _scheduler is None:
+        return None
+    try:
+        job = _scheduler.get_jobs()[0]
+        nf = job.next_run_time
+        return nf.isoformat() if nf else None
+    except Exception:
+        return None
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    scheduler = BackgroundScheduler(daemon=True)
-    scheduler.add_job(check_for_updates, "interval", hours=CHECK_INTERVAL_HOURS)
-    scheduler.start()
+    check_hour, check_minute = map(int, CHECK_TIME.split(":"))
+
+    _scheduler = BackgroundScheduler(daemon=True, timezone=TIMEZONE)
+    _scheduler.add_job(
+        check_for_updates, "cron",
+        hour=check_hour, minute=check_minute,
+        timezone=TIMEZONE,
+    )
+    _scheduler.start()
+    print(f"[scheduler] Daily check scheduled at {CHECK_TIME} {TIMEZONE}")
+
     threading.Thread(target=check_for_updates, daemon=True).start()
     app.run(host="0.0.0.0", port=9090, debug=False, threaded=True)
