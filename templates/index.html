@@ -434,6 +434,7 @@
   }
 
   function confirmUpdate(name) {
+  }
     if (!confirm(`Update "${name}"?\n\nThis will pull the latest image and recreate the container.`)) return;
     startUpdate(name);
   }
