@@ -297,6 +297,7 @@ def apply_update(container_name: str) -> None:
 
         # Watchtower pattern: disconnect initial network, reconnect all networks
         # This ensures correct iptables/port-binding setup for all network types
+        # NOTE: connect_container_to_network takes (container, network) — container first
         if network_mode != "host" and full_nets:
             if simple_net_name:
                 try:
@@ -308,7 +309,7 @@ def apply_update(container_name: str) -> None:
             for net_name, net_info in full_nets.items():
                 aliases = net_info["aliases"] or None
                 client.api.connect_container_to_network(
-                    net_name, new_c["Id"], aliases=aliases
+                    new_c["Id"], net_name, aliases=aliases
                 )
 
         client.api.start(new_c["Id"])
