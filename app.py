@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import re
+import secrets
 import threading
 
 import apprise
@@ -21,13 +22,13 @@ app = Flask(__name__)
 
 DATA_DIR = "/app/data"
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
-CHECK_TIME             = os.environ.get("CHECK_TIME", "03:00")
-TIMEZONE               = os.environ.get("TIMEZONE", "Australia/Melbourne")
-NOTIFY_URL             = os.environ.get("NOTIFY_URL", "")
-GITHUB_WEBHOOK_SECRET  = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+CHECK_TIME            = os.environ.get("CHECK_TIME", "03:00")
+TIMEZONE              = os.environ.get("TIMEZONE", "Australia/Melbourne")
+NOTIFY_URL            = os.environ.get("NOTIFY_URL", "").strip()
+GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
 
-_state_lock   = threading.Lock()
-_check_lock   = threading.Lock()
+_state_lock    = threading.Lock()
+_check_lock    = threading.Lock()
 _check_running = False
 _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
@@ -43,7 +44,8 @@ def load_state() -> dict:
                 return json.load(f)
         except Exception:
             pass
-    return {"available": {}, "deferred": {}, "history": [], "last_check": None}
+    return {"available": {}, "deferred": {}, "history": [], "last_check": None,
+            "notify_url": None}
 
 
 def save_state(state: dict) -> None:
@@ -54,12 +56,45 @@ def save_state(state: dict) -> None:
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
+def get_effective_notify_url() -> str:
+    """Return the effective notify URL.
+
+    If NOTIFY_URL env var is set, use it.
+    Otherwise auto-generate a unique private ntfy.sh topic on first run
+    and persist it in state.json so it survives container restarts.
+    """
+    if NOTIFY_URL:
+        return NOTIFY_URL
+    with _state_lock:
+        state = load_state()
+        if not state.get("notify_url"):
+            topic = f"du-{secrets.token_hex(4)}"
+            state["notify_url"] = f"ntfy://ntfy.sh/{topic}"
+            save_state(state)
+            print(f"[notify] Auto-generated private topic: ntfy.sh/{topic}")
+        return state["notify_url"]
+
+
+def get_notify_info() -> dict | None:
+    """Return subscribe info for the UI, or None if notifications are disabled."""
+    url = get_effective_notify_url()
+    if not url or not url.startswith("ntfy://"):
+        return None
+    # ntfy://ntfy.sh/topic  →  ntfy.sh/topic
+    subscribe = url.replace("ntfy://", "")
+    return {
+        "subscribe": subscribe,
+        "auto": not bool(NOTIFY_URL),  # True = auto-generated, show setup banner
+    }
+
+
 def send_notification(title: str, body: str) -> None:
-    if not NOTIFY_URL:
+    url = get_effective_notify_url()
+    if not url:
         return
     try:
         a = apprise.Apprise()
-        a.add(NOTIFY_URL)
+        a.add(url)
         a.notify(title=title, body=body)
         print(f"[notify] Sent: {title}")
     except Exception as e:
@@ -402,7 +437,6 @@ def fetch_changelog(container_name: str) -> dict:
 
 @app.route("/webhook/github", methods=["POST"])
 def webhook_github():
-    # Verify HMAC-SHA256 signature
     if GITHUB_WEBHOOK_SECRET:
         sig = request.headers.get("X-Hub-Signature-256", "")
         expected = "sha256=" + hmac.new(
@@ -440,7 +474,7 @@ def webhook_github():
             title = f"✅ PR merged — {repo}"
             body  = f"#{pr.get('number')}: {pr.get('title')}"
 
-    elif event == "watch":  # star
+    elif event == "watch":
         if payload.get("action") == "started":
             sender = payload.get("sender", {}).get("login", "someone")
             stars  = payload.get("repository", {}).get("stargazers_count", "?")
@@ -543,6 +577,7 @@ def api_status():
         "check_running": _check_running,
         "history": state.get("history", [])[:20],
         "next_check": _next_check_time(),
+        "notify": get_notify_info(),
     })
 
 
@@ -627,6 +662,12 @@ if __name__ == "__main__":
     )
     _scheduler.start()
     print(f"[scheduler] Daily check scheduled at {CHECK_TIME} {TIMEZONE}")
+
+    # Ensure notify URL is initialised and log it
+    notify_info = get_notify_info()
+    if notify_info:
+        prefix = "Auto-generated" if notify_info["auto"] else "Configured"
+        print(f"[notify] {prefix} topic: {notify_info['subscribe']}")
 
     if GITHUB_WEBHOOK_SECRET:
         print(f"[github] Webhook endpoint active at /webhook/github")
