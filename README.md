@@ -29,34 +29,23 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 - Docker with access to `/var/run/docker.sock`
 - Works on Synology DSM, Unraid, Proxmox, or any Linux host running Docker
-- No `docker compose` binary required — all container management is via the Python Docker SDK
 
 ---
 
 ## Quick start
 
+> **Important:** docker-updater is built from source — you need to clone the full repo before running `docker compose up`. Copying just the compose snippet will fail because the `Dockerfile` and app files won't be present.
+
 ```bash
-# Clone the repo
+# 1. Clone the repo
 git clone https://github.com/liquidguru/docker-updater.git
 cd docker-updater
 
-# Create the data directory (required before first run)
+# 2. Create the data directory
 mkdir -p data
 
-# Build and start
-docker build -t docker-updater .
-docker run -d \
-  --name docker-updater \
-  --restart unless-stopped \
-  -p 9292:9090 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/app.py:/app/app.py:ro \
-  -v $(pwd)/templates:/app/templates:ro \
-  -v $(pwd)/static:/app/static:ro \
-  -e CHECK_TIME=03:00 \
-  -e TIMEZONE=Australia/Melbourne \
-  docker-updater:latest
+# 3. Build and start
+docker compose up -d
 ```
 
 Then open `http://<your-host>:9292` in your browser.
@@ -64,6 +53,8 @@ Then open `http://<your-host>:9292` in your browser.
 ---
 
 ## docker-compose.yml
+
+The `docker-compose.yml` included in the repo is ready to use as-is. Here it is for reference:
 
 ```yaml
 services:
@@ -86,7 +77,7 @@ services:
       - DOCKER_HOST=unix:///var/run/docker.sock
 ```
 
-> **Port note:** The container listens internally on port 9090. The host binding `9292:9090` avoids clashing with Prometheus, which commonly uses 9090.
+> **Port note:** The container listens internally on port 9090. The host binding `9292:9090` avoids clashing with Prometheus, which commonly uses 9090. Change it to whatever suits your setup.
 
 ---
 
@@ -95,7 +86,7 @@ services:
 | Environment variable | Default | Description |
 |---|---|---|
 | `CHECK_TIME` | `03:00` | Time of day to run the scheduled digest check (HH:MM) |
-| `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check |
+| `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check — any [tz database name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *(empty)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications — e.g. `ntfy://ntfy.sh/my-topic`, `discord://...`, `slack://...` |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker socket path |
 
@@ -141,9 +132,16 @@ docker rm watchtower
 
 ## Caveats
 
+- **Must be cloned, not just copied**: The app is built from source. You need the full repo (`git clone`) — copying just the compose snippet won't work.
 - **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed.
 - **Named volumes**: Preserved automatically — volume mounts are read from the container's `HostConfig.Binds` and reattached on recreation.
 - **Locally-built images**: Any container whose image has no `RepoDigests` is skipped (these can't be compared against a registry).
 - **Private registries**: Currently supports anonymous and Bearer-token registries. Basic auth (username/password) registries are not yet supported.
-- **Breaking changes in new versions**: docker-updater preserves the environment variables your container was *running with*, but cannot detect when a new image version introduces *new required* environment variables. If an update fails with an application-level error after recreation, check the image's release notes for new required env vars (example: Homarr added `SECRET_ENCRYPTION_KEY` in a recent release).
+- **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required environment variables. If an update fails with an application-level error after recreation, check the image's release notes for new required env vars.
 - **host network mode**: Containers using `--network host` are recreated correctly; the network reconnect step is skipped for these.
+
+---
+
+## License
+
+MIT
