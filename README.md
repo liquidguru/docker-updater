@@ -34,18 +34,19 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 ## Quick start
 
-> **Important:** docker-updater is built from source — you need to clone the full repo before running `docker compose up`. Copying just the compose snippet will fail because the `Dockerfile` and app files won't be present.
-
 ```bash
-# 1. Clone the repo
-git clone https://github.com/liquidguru/docker-updater.git
-cd docker-updater
-
-# 2. Create the data directory
+mkdir docker-updater && cd docker-updater
 mkdir -p data
 
-# 3. Build and start
-docker compose up -d
+docker run -d \
+  --name docker-updater \
+  --restart unless-stopped \
+  -p 9292:9090 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v $(pwd)/data:/app/data \
+  -e CHECK_TIME=03:00 \
+  -e TIMEZONE=Australia/Melbourne \
+  ghcr.io/liquidguru/docker-updater:latest
 ```
 
 Then open `http://<your-host>:9292` in your browser.
@@ -54,12 +55,10 @@ Then open `http://<your-host>:9292` in your browser.
 
 ## docker-compose.yml
 
-The `docker-compose.yml` included in the repo is ready to use as-is. Here it is for reference:
-
 ```yaml
 services:
   docker-updater:
-    build: .
+    image: ghcr.io/liquidguru/docker-updater:latest
     container_name: docker-updater
     restart: unless-stopped
     ports:
@@ -67,15 +66,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
-      - ./app.py:/app/app.py:ro
-      - ./templates:/app/templates:ro
-      - ./static:/app/static:ro
     environment:
       - CHECK_TIME=03:00
       - TIMEZONE=Australia/Melbourne
       - NOTIFY_URL=ntfy://ntfy.sh/your-topic   # optional
       - DOCKER_HOST=unix:///var/run/docker.sock
 ```
+
+Save as `docker-compose.yml`, create a `data/` directory alongside it, then run `docker compose up -d`. No clone required.
 
 > **Port note:** The container listens internally on port 9090. The host binding `9292:9090` avoids clashing with Prometheus, which commonly uses 9090. Change it to whatever suits your setup.
 
@@ -119,6 +117,19 @@ This works out of the box for most images maintained by projects that publish Gi
 
 ---
 
+## Building from source
+
+If you want to hack on it or run the latest uncommitted changes:
+
+```bash
+git clone https://github.com/liquidguru/docker-updater.git
+cd docker-updater
+mkdir -p data
+docker compose up -d   # uses the build: . compose file in the repo
+```
+
+---
+
 ## Replacing Watchtower
 
 If you have Watchtower running, stop it after confirming docker-updater is working:
@@ -132,7 +143,6 @@ docker rm watchtower
 
 ## Caveats
 
-- **Must be cloned, not just copied**: The app is built from source. You need the full repo (`git clone`) — copying just the compose snippet won't work.
 - **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed.
 - **Named volumes**: Preserved automatically — volume mounts are read from the container's `HostConfig.Binds` and reattached on recreation.
 - **Locally-built images**: Any container whose image has no `RepoDigests` is skipped (these can't be compared against a registry).

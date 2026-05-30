@@ -1,5 +1,7 @@
 services:
   docker-updater:
+    # For production use, replace 'build: .' with:
+    # image: ghcr.io/liquidguru/docker-updater:latest
     build: .
     container_name: docker-updater
     restart: unless-stopped
