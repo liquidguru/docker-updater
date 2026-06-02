@@ -4,3 +4,4 @@ requests==2.31.0
 APScheduler==3.10.4
 apprise==1.9.3
 pytz==2024.1
+paramiko==3.4.0

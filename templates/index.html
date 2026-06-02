@@ -31,6 +31,7 @@
   .btn-secondary { background:transparent; border:1px solid var(--border); color:var(--text); }
   .btn-ghost     { background:transparent; color:var(--muted); padding:5px 8px; }
   .btn-check     { background:#1f6feb; color:#fff; }
+  .btn-danger    { background:transparent; border:1px solid var(--red); color:var(--red); }
   .btn-sm        { padding:3px 10px; font-size:12px; }
   .btn-link      { background:transparent; color:var(--blue); padding:0; font-size:12px; text-decoration:underline; text-underline-offset:2px; }
   .btn-link:hover { filter:none; opacity:.8; }
@@ -67,8 +68,12 @@
   .card-info { min-width:0; }
   .card-name { font-weight:600; font-size:14px; margin-bottom:2px; }
   .card-image { font-family:'Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .card-meta { font-size:11px; color:var(--muted); margin-top:3px; display:flex; align-items:center; gap:8px; }
+  .card-meta { font-size:11px; color:var(--muted); margin-top:3px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .card-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+
+  .host-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--muted); white-space:nowrap; }
+  .host-chip.online  { border-color:rgba(63,185,80,.3); color:var(--green); }
+  .host-chip.offline { border-color:rgba(248,81,73,.3); color:var(--red); }
 
   .badge-status { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.4px; }
   .badge-update   { background:rgba(210,153,34,.15); color:var(--orange); border:1px solid rgba(210,153,34,.3); }
@@ -89,6 +94,30 @@
   .history-status-success { color:var(--green); }
   .history-status-error   { color:var(--red); }
 
+  /* Host management */
+  .host-list { display:flex; flex-direction:column; gap:8px; }
+  .host-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:14px 16px; display:flex; align-items:center; gap:12px; }
+  .host-card.local { border-left:3px solid var(--green); }
+  .host-card.remote-online  { border-left:3px solid var(--blue); }
+  .host-card.remote-offline { border-left:3px solid var(--red); }
+  .host-card.remote-unknown { border-left:3px solid var(--border); }
+  .host-info { flex:1; min-width:0; }
+  .host-name { font-weight:600; font-size:14px; }
+  .host-url  { font-family:monospace; font-size:12px; color:var(--muted); margin-top:2px; }
+  .host-status-text { font-size:11px; margin-top:3px; }
+  .host-status-text.online  { color:var(--green); }
+  .host-status-text.offline { color:var(--red); }
+  .host-status-text.unknown { color:var(--muted); }
+  .add-host-form { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .add-host-form input { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:7px 12px; font-size:13px; color:var(--text); font-family:inherit; width:100%; }
+  .add-host-form input:focus { outline:none; border-color:var(--blue); }
+  .add-host-form label { font-size:12px; color:var(--muted); margin-bottom:2px; display:block; }
+  .form-row { display:flex; gap:10px; }
+  .form-row > div { flex:1; }
+  .test-result { font-size:12px; padding:6px 10px; border-radius:6px; margin-top:4px; }
+  .test-result.ok    { background:rgba(63,185,80,.1); color:var(--green); border:1px solid rgba(63,185,80,.2); }
+  .test-result.error { background:rgba(248,81,73,.1); color:var(--red);   border:1px solid rgba(248,81,73,.2); }
+
   /* Modals */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:200; align-items:center; justify-content:center; }
   .modal-overlay.open { display:flex; }
@@ -97,14 +126,10 @@
   .modal-header h3 { font-size:14px; font-weight:600; }
   .modal-body { flex:1; overflow-y:auto; }
   .modal-footer { padding:12px 16px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; align-items:center; }
-
-  /* Log modal */
   .log-output { font-family:'Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; line-height:1.6; padding:16px; white-space:pre-wrap; word-break:break-all; color:#cdd9e5; min-height:200px; }
   .log-success { color:var(--green); font-weight:600; }
   .log-error   { color:var(--red);   font-weight:600; }
   .log-section { color:var(--blue); }
-
-  /* Changelog modal */
   .changelog-body { padding:16px; }
   .changelog-loading { text-align:center; padding:32px; color:var(--muted); }
   .changelog-error { padding:16px; color:var(--red); font-size:13px; }
@@ -118,12 +143,9 @@
   .release-date { font-size:11px; color:var(--muted); margin-left:auto; white-space:nowrap; }
   .release-prerelease { font-size:11px; color:var(--orange); background:rgba(210,153,34,.12); border:1px solid rgba(210,153,34,.3); border-radius:4px; padding:1px 6px; }
   .release-body { font-size:13px; line-height:1.65; color:#cdd9e5; white-space:pre-wrap; word-break:break-word; }
-  .release-body h1,.release-body h2,.release-body h3 { font-size:13px; font-weight:600; color:var(--text); margin:10px 0 4px; }
-  .release-body ul,.release-body ol { padding-left:18px; margin:4px 0; }
-  .release-body li { margin:2px 0; }
-  .release-body a { color:var(--blue); }
-  .release-body code { font-family:monospace; background:var(--surface2); border-radius:3px; padding:1px 4px; font-size:11px; }
   .release-body strong { color:var(--text); }
+  .release-body code { font-family:monospace; background:var(--surface2); border-radius:3px; padding:1px 4px; font-size:11px; }
+  .release-body a { color:var(--blue); }
   .changelog-github-link { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--blue); margin-left:auto; }
 
   #checking-banner { display:none; background:rgba(88,166,255,.08); border:1px solid rgba(88,166,255,.2); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--blue); align-items:center; gap:8px; }
@@ -151,6 +173,7 @@
   <button class="tab"        data-tab="ok"       onclick="switchTab('ok')">Up to Date <span class="badge" id="tab-count-ok">0</span></button>
   <button class="tab"        data-tab="unknown"  onclick="switchTab('unknown')">Unchecked <span class="badge" id="tab-count-unknown">0</span></button>
   <button class="tab"        data-tab="all"      onclick="switchTab('all')">All <span class="badge" id="tab-count-all">0</span></button>
+  <button class="tab"        data-tab="hosts"    onclick="switchTab('hosts')">Hosts <span class="badge" id="tab-count-hosts">0</span></button>
 </div>
 
 <main>
@@ -174,8 +197,9 @@
   </div>
 
   <div id="container-list" class="container-list"></div>
+  <div id="hosts-panel" style="display:none"></div>
 
-  <div class="section-title">Recent Updates</div>
+  <div class="section-title" id="history-title">Recent Updates</div>
   <div id="history-list" class="history-list"></div>
 </main>
 
@@ -222,9 +246,7 @@
       <a id="changelog-github-link" class="changelog-github-link" href="#" target="_blank" rel="noopener" style="display:none">View on GitHub ↗</a>
       <button class="btn-ghost" onclick="closeChangelogModal()" style="margin-left:8px">✕</button>
     </div>
-    <div class="modal-body">
-      <div id="changelog-content" class="changelog-body"></div>
-    </div>
+    <div class="modal-body"><div id="changelog-content" class="changelog-body"></div></div>
     <div class="modal-footer">
       <button class="btn-secondary btn-sm" onclick="closeChangelogModal()">Close</button>
       <button class="btn-primary btn-sm" id="changelog-update-btn" onclick="changelogUpdate()">Update Now</button>
@@ -234,13 +256,15 @@
 
 <script>
   let allContainers = [];
+  let allHosts = [];
+  let multiHost = false;   // true when >1 host configured
   let currentTab = 'update';
   let selectedNames = new Set();
   let logPollTimer = null;
-  let logContainerName = null;
+  let logTarget = null;    // {name, hostId}
   let refreshTimer = null;
-  let deferTarget = null;
-  let changelogTarget = null;
+  let deferTarget = null;  // {name, hostId}
+  let changelogTarget = null; // {name, hostId}
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
@@ -250,20 +274,27 @@
       const data = await r.json();
       if (data.error) return;
       allContainers = data.containers || [];
+      allHosts      = data.hosts || [];
+      multiHost     = allHosts.length > 1;
 
-      // Show ntfy subscribe banner on first run (auto-generated topic only)
+      // Notify banner (auto-generated topic)
       if (data.notify && data.notify.auto && !localStorage.getItem('notify_dismissed')) {
         document.getElementById('notify-topic').textContent = data.notify.subscribe;
         document.getElementById('notify-banner').classList.add('visible');
       }
 
-      // Auto-reconnect: if an update is running and log modal is closed, reopen it
+      // Auto-reconnect log modal if an update is running
       const activeUpdate = allContainers.find(c => c.updating);
-      if (activeUpdate && !logContainerName && !document.getElementById('log-modal-overlay').classList.contains('open')) {
-        openLogModal(activeUpdate.name);
+      if (activeUpdate && !logTarget &&
+          !document.getElementById('log-modal-overlay').classList.contains('open')) {
+        openLogModal(activeUpdate.name, activeUpdate.host_id);
       }
-      const updatable = new Set(allContainers.filter(c => c.status === 'update').map(c => c.name));
-      selectedNames.forEach(n => { if (!updatable.has(n)) selectedNames.delete(n); });
+
+      const updatable = new Set(
+        allContainers.filter(c => c.status === 'update').map(c => `${c.host_id}:${c.name}`)
+      );
+      selectedNames.forEach(k => { if (!updatable.has(k)) selectedNames.delete(k); });
+
       renderAll(data);
       const banner = document.getElementById('checking-banner');
       data.check_running ? banner.classList.add('visible') : banner.classList.remove('visible');
@@ -279,14 +310,18 @@
   // ── Render ────────────────────────────────────────────────────────────────
 
   function renderAll(data) {
-    updateTabCounts(allContainers);
-    renderContainerList(allContainers, currentTab);
+    updateTabCounts(allContainers, allHosts);
+    if (currentTab === 'hosts') {
+      renderHostsPanel();
+    } else {
+      renderContainerList(allContainers, currentTab);
+    }
     renderHistory(data.history || []);
     renderHeaderStats(allContainers, data.last_check);
     updateSelectionUI();
   }
 
-  function updateTabCounts(containers) {
+  function updateTabCounts(containers, hosts) {
     const counts = { update:0, deferred:0, ok:0, unknown:0 };
     containers.forEach(c => { if (c.status in counts) counts[c.status]++; });
     document.getElementById('tab-count-update').textContent   = counts.update;
@@ -294,14 +329,21 @@
     document.getElementById('tab-count-ok').textContent       = counts.ok;
     document.getElementById('tab-count-unknown').textContent  = counts.unknown;
     document.getElementById('tab-count-all').textContent      = containers.length;
+    document.getElementById('tab-count-hosts').textContent    = hosts.length;
   }
 
   function switchTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
-    renderContainerList(allContainers, tab);
-    updateSelectionUI();
+    const isHosts = tab === 'hosts';
+    document.getElementById('container-list').style.display = isHosts ? 'none' : '';
+    document.getElementById('select-toolbar').style.display = isHosts ? 'none' : '';
+    document.getElementById('hosts-panel').style.display    = isHosts ? '' : 'none';
+    document.getElementById('history-title').style.display  = isHosts ? 'none' : '';
+    document.getElementById('history-list').style.display   = isHosts ? 'none' : '';
+    if (isHosts) renderHostsPanel();
+    else { renderContainerList(allContainers, tab); updateSelectionUI(); }
   }
 
   function renderContainerList(containers, tab) {
@@ -329,43 +371,49 @@
       deferred: `<span class="badge-status badge-deferred">Deferred until ${c.defer_until}</span>`,
       unknown:  '<span class="badge-status badge-unknown">Not Checked</span>',
     };
-    const isUpdating = c.updating;
+    const isUpdating  = c.updating;
     const statusClass = isUpdating ? 'updating' : `status-${c.status}`;
-    const isSelected = selectedNames.has(c.name);
+    const selKey      = `${c.host_id}:${c.name}`;
+    const isSelected  = selectedNames.has(selKey);
     const badge = isUpdating
       ? `<span class="badge-status badge-updating"><span class="spinner"></span> Updating…</span>`
       : (statusMap[c.status] || '');
     const checkedAt = c.checked_at ? `Checked ${timeAgo(c.checked_at)}` : 'Not yet checked';
 
+    // Host chip — only show when multi-host
+    const hostChip = multiHost
+      ? `<span class="host-chip">${esc(c.host_name)}</span>`
+      : '';
+
     const showCb = c.status === 'update' && !isUpdating;
     const cbHtml = showCb
-      ? `<div class="card-cb-wrap"><input type="checkbox" class="card-cb" data-name="${esc(c.name)}" ${isSelected ? 'checked' : ''} onchange="toggleSelect('${esc(c.name)}', this.checked)"></div>`
+      ? `<div class="card-cb-wrap"><input type="checkbox" class="card-cb" data-key="${esc(selKey)}" ${isSelected ? 'checked' : ''} onchange="toggleSelect('${esc(selKey)}', this.checked)"></div>`
       : '';
 
     const whatsNew = (c.status === 'update' || c.status === 'deferred') && !isUpdating && c.has_changelog
-      ? `<button class="btn-link" onclick="openChangelog('${esc(c.name)}')">What's new?</button>`
+      ? `<button class="btn-link" onclick="openChangelog('${esc(c.name)}','${esc(c.host_id)}')">What's new?</button>`
       : '';
 
     let actions = '';
     if (isUpdating) {
-      actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}')">View Log</button>`;
+      actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">View Log</button>`;
     } else {
-      if (c.has_logs) actions += `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}')">Last Log</button>`;
+      if (c.has_logs) actions += `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">Last Log</button>`;
       if (c.status === 'update') {
-        actions += `<button class="btn-primary btn-sm" onclick="confirmUpdate('${esc(c.name)}')">Update</button>
-                    <button class="btn-secondary btn-sm" onclick="openDefer('${esc(c.name)}')">Defer ▾</button>`;
+        actions += `<button class="btn-primary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">Update</button>
+                    <button class="btn-secondary btn-sm" onclick="openDefer('${esc(c.name)}','${esc(c.host_id)}')">Defer ▾</button>`;
       } else if (c.status === 'deferred') {
-        actions += `<button class="btn-secondary btn-sm" onclick="confirmUpdate('${esc(c.name)}')">Update Now</button>
-                    <button class="btn-ghost btn-sm" onclick="undefer('${esc(c.name)}')">Remove Defer</button>`;
+        actions += `<button class="btn-secondary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">Update Now</button>
+                    <button class="btn-ghost btn-sm" onclick="undefer('${esc(c.name)}','${esc(c.host_id)}')">Remove Defer</button>`;
       }
     }
 
-    return `<div class="container-card ${statusClass} ${showCb ? 'has-cb' : ''} ${isSelected ? 'selected' : ''}" id="card-${esc(c.name)}">
+    return `<div class="container-card ${statusClass} ${showCb ? 'has-cb' : ''} ${isSelected ? 'selected' : ''}" id="card-${esc(selKey)}">
       ${cbHtml}
       <div class="card-info">
         <div class="card-name">${esc(c.name)}</div>
         <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
-        <div class="card-meta">${checkedAt}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
+        <div class="card-meta">${checkedAt}${hostChip ? `<span>·</span>${hostChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
       </div>
       <div class="card-actions">${badge}${actions}</div>
     </div>`;
@@ -388,20 +436,123 @@
     if (!history.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">No updates recorded yet.</div>'; return; }
     el.innerHTML = history.map(h => {
       const ok = h.status === 'success';
+      const hostLabel = multiHost && h.host_id && h.host_id !== 'local'
+        ? `<span class="host-chip" style="margin-left:4px">${esc(h.host_id)}</span>` : '';
       return `<div class="history-item">
         <span class="${ok ? 'history-status-success' : 'history-status-error'}">${ok ? '✅' : '❌'}</span>
-        <span class="history-name">${esc(h.container)}</span>
+        <span class="history-name">${esc(h.container)}${hostLabel}</span>
         <span class="history-image">${esc(h.image)}</span>
         <span class="history-time">${timeAgo(h.updated_at)}</span>
       </div>`;
     }).join('');
   }
 
+  // ── Hosts panel ───────────────────────────────────────────────────────────
+
+  function renderHostsPanel() {
+    const panel = document.getElementById('hosts-panel');
+    const hostsHTML = allHosts.map(h => {
+      const isLocal  = h.id === 'local';
+      const cls      = isLocal ? 'local' : `remote-${h.status || 'unknown'}`;
+      const statusLabel = isLocal ? 'Local socket' : (h.status || 'unknown');
+      const statusCls   = isLocal ? 'online' : (h.status || 'unknown');
+      const lastChk     = h.last_check ? `Last checked ${timeAgo(h.last_check)}` : 'Not yet checked';
+      const errorTip    = h.last_error ? `<span style="color:var(--red);font-size:11px;margin-top:2px;display:block" title="${esc(h.last_error)}">⚠ ${esc(h.last_error.substring(0,80))}${h.last_error.length>80?'…':''}</span>` : '';
+      const actions = isLocal ? '' : `
+        <button class="btn-secondary btn-sm" onclick="testHost('${esc(h.id)}',this)">Test</button>
+        <button class="btn-danger btn-sm" onclick="removeHost('${esc(h.id)}','${esc(h.name)}')">Remove</button>`;
+      return `<div class="host-card ${cls}">
+        <div class="host-info">
+          <div class="host-name">${esc(h.name)}</div>
+          <div class="host-url">${esc(h.url || '')}</div>
+          <div class="host-status-text ${statusCls}">${statusLabel} · ${lastChk}</div>
+          ${errorTip}
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">${actions}</div>
+      </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+      <div class="host-list">${hostsHTML}</div>
+      <div class="section-title" style="margin-top:28px">Add Remote Host</div>
+      <div class="add-host-form">
+        <div class="form-row">
+          <div>
+            <label>Name</label>
+            <input id="add-host-name" type="text" placeholder="VPS 1" />
+          </div>
+          <div style="flex:2">
+            <label>Docker URL</label>
+            <input id="add-host-url" type="text" placeholder="ssh://user@1.2.3.4  or  tcp://1.2.3.4:2376" />
+          </div>
+        </div>
+        <div id="add-host-result"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-secondary btn-sm" onclick="testNewHost()">Test Connection</button>
+          <button class="btn-primary btn-sm" onclick="addHost()">Add Host</button>
+        </div>
+      </div>`;
+  }
+
+  async function testHost(hostId, btn) {
+    btn.textContent = 'Testing…'; btn.disabled = true;
+    const r = await fetch(`/api/hosts/${encodeURIComponent(hostId)}/test`, {method:'POST'});
+    const d = await r.json();
+    btn.textContent = 'Test'; btn.disabled = false;
+    alert(d.ok ? `✅ Connected — Docker ${d.version}, ${d.containers} containers` : `❌ ${d.error}`);
+  }
+
+  async function testNewHost() {
+    const name = document.getElementById('add-host-name').value.trim();
+    const url  = document.getElementById('add-host-url').value.trim();
+    const res  = document.getElementById('add-host-result');
+    if (!url) { res.innerHTML = '<div class="test-result error">URL is required.</div>'; return; }
+    res.innerHTML = '<div class="test-result" style="color:var(--muted)">Testing…</div>';
+    // temporarily add + test + remove
+    const addR = await fetch('/api/hosts', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name || 'test', url})});
+    const addD = await addR.json();
+    if (!addD.ok) { res.innerHTML = `<div class="test-result error">${esc(addD.error)}</div>`; return; }
+    const testR = await fetch(`/api/hosts/${encodeURIComponent(addD.id)}/test`, {method:'POST'});
+    const testD = await testR.json();
+    await fetch(`/api/hosts/${encodeURIComponent(addD.id)}`, {method:'DELETE'});
+    if (testD.ok) {
+      res.innerHTML = `<div class="test-result ok">✅ Connected — Docker ${testD.version}, ${testD.containers} containers</div>`;
+    } else {
+      res.innerHTML = `<div class="test-result error">❌ ${esc(testD.error)}</div>`;
+    }
+  }
+
+  async function addHost() {
+    const name = document.getElementById('add-host-name').value.trim();
+    const url  = document.getElementById('add-host-url').value.trim();
+    const res  = document.getElementById('add-host-result');
+    if (!name || !url) { res.innerHTML = '<div class="test-result error">Name and URL are required.</div>'; return; }
+    const r = await fetch('/api/hosts', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, url})});
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('add-host-name').value = '';
+      document.getElementById('add-host-url').value  = '';
+      res.innerHTML = '<div class="test-result ok">✅ Host added. Running a check now…</div>';
+      fetch('/api/check', {method:'POST'});
+      fetchStatus();
+    } else {
+      res.innerHTML = `<div class="test-result error">❌ ${esc(d.error)}</div>`;
+    }
+  }
+
+  async function removeHost(hostId, hostName) {
+    if (!confirm(`Remove host "${hostName}"? Its cached state will be deleted.`)) return;
+    await fetch(`/api/hosts/${encodeURIComponent(hostId)}`, {method:'DELETE'});
+    fetchStatus();
+  }
+
   // ── Selection ─────────────────────────────────────────────────────────────
 
-  function toggleSelect(name, checked) {
-    checked ? selectedNames.add(name) : selectedNames.delete(name);
-    const card = document.getElementById(`card-${name}`);
+  function toggleSelect(selKey, checked) {
+    checked ? selectedNames.add(selKey) : selectedNames.delete(selKey);
+    const card = document.getElementById(`card-${selKey}`);
     if (card) card.classList.toggle('selected', checked);
     updateSelectionUI();
   }
@@ -410,8 +561,9 @@
     const visible = (currentTab === 'all' ? allContainers : allContainers.filter(c => c.status === currentTab))
       .filter(c => c.status === 'update' && !c.updating);
     visible.forEach(c => {
-      checked ? selectedNames.add(c.name) : selectedNames.delete(c.name);
-      const card = document.getElementById(`card-${c.name}`);
+      const selKey = `${c.host_id}:${c.name}`;
+      checked ? selectedNames.add(selKey) : selectedNames.delete(selKey);
+      const card = document.getElementById(`card-${selKey}`);
       if (card) { card.classList.toggle('selected', checked); const cb = card.querySelector('.card-cb'); if (cb) cb.checked = checked; }
     });
     updateSelectionUI();
@@ -421,54 +573,58 @@
     const visible = (currentTab === 'all' ? allContainers : allContainers.filter(c => c.status === currentTab))
       .filter(c => c.status === 'update' && !c.updating);
     const toolbar = document.getElementById('select-toolbar');
-    if (!visible.length) { toolbar.classList.add('hidden'); return; }
+    if (!visible.length || currentTab === 'hosts') { toolbar.classList.add('hidden'); return; }
     toolbar.classList.remove('hidden');
     const n = selectedNames.size;
     document.getElementById('select-count').textContent = n === 0 ? '0 selected' : `${n} selected`;
     const btn = document.getElementById('update-selected-btn');
     btn.textContent = `Update Selected (${n})`;
     btn.disabled = n === 0;
-    const selectAll = document.getElementById('select-all-cb');
-    const allChecked = visible.every(c => selectedNames.has(c.name));
-    const someChecked = visible.some(c => selectedNames.has(c.name));
-    selectAll.checked = allChecked;
+    const allChecked  = visible.every(c => selectedNames.has(`${c.host_id}:${c.name}`));
+    const someChecked = visible.some(c => selectedNames.has(`${c.host_id}:${c.name}`));
+    const selectAll   = document.getElementById('select-all-cb');
+    selectAll.checked       = allChecked;
     selectAll.indeterminate = someChecked && !allChecked;
   }
 
   async function updateSelected() {
     if (!selectedNames.size) return;
-    const names = [...selectedNames];
-    const list = names.map(n => `  • ${n}`).join('\n');
-    if (!confirm(`Update ${names.length} container${names.length > 1 ? 's' : ''}?\n\n${list}\n\nEach will be pulled and recreated.`)) return;
-    selectedNames.clear();
-    updateSelectionUI();
-    for (const name of names) await fetch(`/api/update/${encodeURIComponent(name)}`, { method:'POST' });
+    const keys = [...selectedNames];
+    const list = keys.map(k => `  • ${k.split(':').slice(1).join(':')}`).join('\n');
+    if (!confirm(`Update ${keys.length} container${keys.length > 1 ? 's' : ''}?\n\n${list}`)) return;
+    selectedNames.clear(); updateSelectionUI();
+    for (const key of keys) {
+      const [hostId, ...rest] = key.split(':');
+      const name = rest.join(':');
+      await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
+    }
     fetchStatus();
   }
 
-  // ── Single update / defer ─────────────────────────────────────────────────
+  // ── Update / defer ────────────────────────────────────────────────────────
 
   async function triggerCheck() {
     document.getElementById('check-btn').disabled = true;
     document.getElementById('checking-banner').classList.add('visible');
-    await fetch('/api/check', { method:'POST' });
+    await fetch('/api/check', {method:'POST'});
     fetchStatus();
   }
 
-  function confirmUpdate(name) {
+  function confirmUpdate(name, hostId = 'local') {
     if (!confirm(`Update "${name}"?\n\nThis will pull the latest image and recreate the container.`)) return;
-    startUpdate(name);
+    startUpdate(name, hostId);
   }
 
-  async function startUpdate(name) {
-    selectedNames.delete(name);
-    openLogModal(name);
-    await fetch(`/api/update/${encodeURIComponent(name)}`, { method:'POST' });
+  async function startUpdate(name, hostId = 'local') {
+    const selKey = `${hostId}:${name}`;
+    selectedNames.delete(selKey);
+    openLogModal(name, hostId);
+    await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
     fetchStatus();
   }
 
-  function openDefer(name) {
-    deferTarget = name;
+  function openDefer(name, hostId = 'local') {
+    deferTarget = {name, hostId};
     document.getElementById('defer-modal-title').textContent = `Defer: ${name}`;
     document.getElementById('defer-modal-overlay').classList.add('open');
   }
@@ -481,63 +637,49 @@
 
   async function submitDefer(days) {
     if (!deferTarget) return;
-    await fetch(`/api/defer/${encodeURIComponent(deferTarget)}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({days}) });
-    closeDeferModal();
+    const {name, hostId} = deferTarget;
+    await fetch(`/api/defer/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`,
+      {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({days})});
+    closeDeferModal(); fetchStatus();
+  }
+
+  async function undefer(name, hostId = 'local') {
+    await fetch(`/api/undefer/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
     fetchStatus();
   }
 
-  async function undefer(name) {
-    await fetch(`/api/undefer/${encodeURIComponent(name)}`, { method:'POST' });
-    fetchStatus();
-  }
+  // ── Changelog ─────────────────────────────────────────────────────────────
 
-  // ── Changelog modal ───────────────────────────────────────────────────────
-
-  async function openChangelog(name) {
-    changelogTarget = name;
+  async function openChangelog(name, hostId = 'local') {
+    changelogTarget = {name, hostId};
     document.getElementById('changelog-modal-title').textContent = `What's new — ${name}`;
     document.getElementById('changelog-github-link').style.display = 'none';
     document.getElementById('changelog-content').innerHTML = '<div class="changelog-loading"><span class="spinner" style="width:18px;height:18px;border-width:3px"></span><p style="margin-top:10px">Fetching release notes…</p></div>';
     document.getElementById('changelog-modal-overlay').classList.add('open');
-
     try {
-      const r = await fetch(`/api/changelog/${encodeURIComponent(name)}`);
-      const data = await r.json();
-      renderChangelog(data);
+      const r = await fetch(`/api/changelog/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`);
+      renderChangelog(await r.json());
     } catch (e) {
-      document.getElementById('changelog-content').innerHTML = `<div class="changelog-error">Failed to fetch changelog: ${esc(String(e))}</div>`;
+      document.getElementById('changelog-content').innerHTML = `<div style="padding:16px;color:var(--red)">Failed: ${esc(String(e))}</div>`;
     }
   }
 
   function renderChangelog(data) {
     const content = document.getElementById('changelog-content');
     const ghLink  = document.getElementById('changelog-github-link');
-
-    if (data.repo) {
-      ghLink.href = `https://github.com/${data.repo}/releases`;
-      ghLink.style.display = 'inline-flex';
-    }
-
+    if (data.repo) { ghLink.href = `https://github.com/${data.repo}/releases`; ghLink.style.display = 'inline-flex'; }
     if (data.error && !data.releases?.length) {
-      content.innerHTML = `<div class="changelog-no-source">
-        <p>${esc(data.error)}</p>
-        ${data.source_url ? `<p style="margin-top:8px"><a href="${esc(data.source_url)}" target="_blank" style="color:var(--blue)">${esc(data.source_url)}</a></p>` : ''}
-      </div>`;
+      content.innerHTML = `<div class="changelog-no-source"><p>${esc(data.error)}</p>${data.source_url?`<p style="margin-top:8px"><a href="${esc(data.source_url)}" target="_blank" style="color:var(--blue)">${esc(data.source_url)}</a></p>`:''}</div>`;
       return;
     }
-
-    if (!data.releases?.length) {
-      content.innerHTML = '<div class="changelog-no-source">No release notes found.</div>';
-      return;
-    }
-
+    if (!data.releases?.length) { content.innerHTML = '<div class="changelog-no-source">No release notes found.</div>'; return; }
     content.innerHTML = data.releases.map(rel => `
       <div class="release">
         <div class="release-header">
-          <span class="release-name">${esc(rel.name || rel.tag)}</span>
+          <span class="release-name">${esc(rel.name||rel.tag)}</span>
           <span class="release-tag">${esc(rel.tag)}</span>
-          ${rel.prerelease ? '<span class="release-prerelease">pre-release</span>' : ''}
-          <span class="release-date">${rel.date ? new Date(rel.date).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) : ''}</span>
+          ${rel.prerelease?'<span class="release-prerelease">pre-release</span>':''}
+          <span class="release-date">${rel.date?new Date(rel.date).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}):''}</span>
         </div>
         <div class="release-body">${renderMarkdown(rel.body)}</div>
       </div>`).join('');
@@ -545,14 +687,13 @@
 
   function renderMarkdown(md) {
     if (!md) return '<em style="color:var(--muted)">No release notes provided.</em>';
-    return md
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-      .replace(/^#{1,3} (.+)$/gm, '<strong>$1</strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-      .replace(/^[-*] (.+)$/gm, '• $1')
-      .replace(/\n/g, '<br>');
+    return md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/^[-*] (.+)$/gm,'• $1')
+      .replace(/\n/g,'<br>');
   }
 
   function closeChangelogModal(e) {
@@ -563,15 +704,15 @@
 
   function changelogUpdate() {
     if (!changelogTarget) return;
-    const name = changelogTarget;
+    const {name, hostId} = changelogTarget;
     closeChangelogModal();
-    confirmUpdate(name);
+    confirmUpdate(name, hostId);
   }
 
   // ── Log modal ─────────────────────────────────────────────────────────────
 
-  function openLogModal(name) {
-    logContainerName = name;
+  function openLogModal(name, hostId = 'local') {
+    logTarget = {name, hostId};
     document.getElementById('log-modal-title').textContent = `Update log — ${name}`;
     document.getElementById('log-output').innerHTML = '';
     document.getElementById('log-status-text').textContent = '';
@@ -583,15 +724,16 @@
     if (e && e.target !== document.getElementById('log-modal-overlay')) return;
     document.getElementById('log-modal-overlay').classList.remove('open');
     clearTimeout(logPollTimer);
-    logContainerName = null;
+    logTarget = null;
   }
 
   async function pollLogs() {
-    if (!logContainerName) return;
+    if (!logTarget) return;
+    const {name, hostId} = logTarget;
     try {
-      const r = await fetch(`/api/logs/${encodeURIComponent(logContainerName)}`);
+      const r = await fetch(`/api/logs/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`);
       const data = await r.json();
-      const out = document.getElementById('log-output');
+      const out  = document.getElementById('log-output');
       out.innerHTML = data.logs.map(line => {
         if (line.startsWith('SUCCESS')) return `<span class="log-success">${esc(line)}</span>`;
         if (line.startsWith('ERROR'))   return `<span class="log-error">${esc(line)}</span>`;
@@ -616,15 +758,13 @@
   // ── Notify banner ─────────────────────────────────────────────────────────
 
   function copyNotifyTopic(e) {
-    const topic = document.getElementById('notify-topic').textContent;
-    navigator.clipboard.writeText(topic).then(() => {
-      e.target.textContent = 'Copied!';
-      setTimeout(() => e.target.textContent = 'Copy', 2000);
+    navigator.clipboard.writeText(document.getElementById('notify-topic').textContent).then(() => {
+      e.target.textContent = 'Copied!'; setTimeout(() => e.target.textContent = 'Copy', 2000);
     });
   }
 
   function dismissNotifyBanner() {
-    localStorage.setItem('notify_dismissed', '1');
+    localStorage.setItem('notify_dismissed','1');
     document.getElementById('notify-banner').classList.remove('visible');
   }
 

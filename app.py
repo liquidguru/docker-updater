@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
 docker-updater — poll registries for image digest changes, apply updates with approval.
+Supports multiple Docker hosts via SSH or TCP.
 """
 
 import datetime
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="paramiko")
 import hashlib
 import hmac
 import json
@@ -20,8 +23,10 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-DATA_DIR = "/app/data"
-STATE_FILE = os.path.join(DATA_DIR, "state.json")
+DATA_DIR             = "/app/data"
+STATE_FILE           = os.path.join(DATA_DIR, "state.json")
+HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
+HOSTS_STATE_DIR      = os.path.join(DATA_DIR, "hosts")
 CHECK_TIME            = os.environ.get("CHECK_TIME", "03:00")
 TIMEZONE              = os.environ.get("TIMEZONE", "Australia/Melbourne")
 NOTIFY_URL            = os.environ.get("NOTIFY_URL", "").strip()
@@ -34,7 +39,14 @@ _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
 
 
-# ── State ─────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _container_key(name: str, host_id: str = "local") -> str:
+    """Unique key for _update_logs / _update_running across hosts."""
+    return name if host_id == "local" else f"{host_id}:{name}"
+
+
+# ── Local state ───────────────────────────────────────────────────────────────
 
 def load_state() -> dict:
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -54,15 +66,55 @@ def save_state(state: dict) -> None:
         json.dump(state, f, indent=2, default=str)
 
 
+# ── Host config ───────────────────────────────────────────────────────────────
+
+def load_hosts() -> list:
+    """Load remote host configs. The local host is always implicit."""
+    if os.path.exists(HOSTS_FILE):
+        try:
+            with open(HOSTS_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+
+def save_hosts(hosts: list) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(HOSTS_FILE, "w") as f:
+        json.dump(hosts, f, indent=2)
+
+
+def load_host_state(host_id: str) -> dict:
+    os.makedirs(HOSTS_STATE_DIR, exist_ok=True)
+    path = os.path.join(HOSTS_STATE_DIR, f"{host_id}.json")
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"available": {}, "deferred": {}, "history": [], "last_check": None,
+            "status": "unknown"}
+
+
+def save_host_state(host_id: str, state: dict) -> None:
+    os.makedirs(HOSTS_STATE_DIR, exist_ok=True)
+    path = os.path.join(HOSTS_STATE_DIR, f"{host_id}.json")
+    with open(path, "w") as f:
+        json.dump(state, f, indent=2, default=str)
+
+
+def get_docker_client(url: str | None = None):
+    """Return a DockerClient for a local socket, SSH, or TCP URL."""
+    if not url or url.startswith("unix://") or url.startswith("npipe://"):
+        return docker.from_env()
+    return docker.DockerClient(base_url=url)
+
+
 # ── Notifications ─────────────────────────────────────────────────────────────
 
 def get_effective_notify_url() -> str:
-    """Return the effective notify URL.
-
-    If NOTIFY_URL env var is set, use it.
-    Otherwise auto-generate a unique private ntfy.sh topic on first run
-    and persist it in state.json so it survives container restarts.
-    """
     if NOTIFY_URL:
         return NOTIFY_URL
     with _state_lock:
@@ -76,16 +128,11 @@ def get_effective_notify_url() -> str:
 
 
 def get_notify_info() -> dict | None:
-    """Return subscribe info for the UI, or None if notifications are disabled."""
     url = get_effective_notify_url()
     if not url or not url.startswith("ntfy://"):
         return None
-    # ntfy://ntfy.sh/topic  →  ntfy.sh/topic
     subscribe = url.replace("ntfy://", "")
-    return {
-        "subscribe": subscribe,
-        "auto": not bool(NOTIFY_URL),  # True = auto-generated, show setup banner
-    }
+    return {"subscribe": subscribe, "auto": not bool(NOTIFY_URL)}
 
 
 def send_notification(title: str, body: str) -> None:
@@ -191,47 +238,99 @@ def is_locally_built(container) -> bool:
 
 # ── Update checking ───────────────────────────────────────────────────────────
 
+def _scan_host(client, host_id: str) -> dict:
+    """Scan one Docker host for image updates. Returns available dict."""
+    available = {}
+    for container in client.containers.list():
+        name = container.name
+        image_name = container.attrs["Config"]["Image"]
+        if is_locally_built(container):
+            continue
+        local_digest = get_local_digest(container)
+        remote_digest = get_remote_digest(image_name)
+        has_update = bool(local_digest and remote_digest and local_digest != remote_digest)
+        flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
+        print(f"[checker:{host_id}] {name}: [{flag}]")
+        if remote_digest:
+            available[name] = {
+                "image": image_name,
+                "local_digest": local_digest,
+                "remote_digest": remote_digest,
+                "has_update": has_update,
+                "checked_at": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+    return available
+
+
 def check_for_updates(notify: bool = False) -> None:
     global _check_running
     if not _check_lock.acquire(blocking=False):
         return
     _check_running = True
     print(f"[checker] Starting digest check (notify={notify})...")
-    try:
-        client = docker.from_env()
-        available: dict = {}
-        for container in client.containers.list():
-            name = container.name
-            image_name = container.attrs["Config"]["Image"]
-            if is_locally_built(container):
-                continue
-            local_digest = get_local_digest(container)
-            remote_digest = get_remote_digest(image_name)
-            has_update = bool(local_digest and remote_digest and local_digest != remote_digest)
-            flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
-            print(f"[checker] {name}: [{flag}]")
-            if remote_digest:
-                available[name] = {
-                    "image": image_name,
-                    "local_digest": local_digest,
-                    "remote_digest": remote_digest,
-                    "has_update": has_update,
-                    "checked_at": datetime.datetime.utcnow().isoformat() + "Z",
-                }
-        with _state_lock:
-            state = load_state()
-            state["available"] = available
-            state["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
-            save_state(state)
 
-        updates = [n for n, v in available.items() if v["has_update"]]
-        count = len(updates)
-        print(f"[checker] Done — {count} update(s) available.")
+    # Collect all updates for notification: list of (host_label, container_name)
+    all_updates: list[tuple[str, str]] = []
+
+    try:
+        # ── Local host (existing behaviour, completely unchanged) ─────────────
+        try:
+            local_client = docker.from_env()
+            local_available = _scan_host(local_client, "local")
+            with _state_lock:
+                state = load_state()
+                state["available"] = local_available
+                state["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
+                save_state(state)
+            updates = [n for n, v in local_available.items() if v["has_update"]]
+            all_updates.extend([("Local", n) for n in updates])
+            print(f"[checker:local] Done — {len(updates)} update(s).")
+        except Exception as e:
+            print(f"[checker:local] Fatal: {e}")
+
+        # ── Remote hosts ───────────────────────────────────────────────────────
+        for host in load_hosts():
+            host_id   = host["id"]
+            host_name = host["name"]
+            try:
+                client = get_docker_client(host.get("url"))
+                client.ping()
+                available = _scan_host(client, host_id)
+                hs = load_host_state(host_id)
+                hs["available"]  = available
+                hs["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
+                hs["status"]     = "online"
+                hs.pop("last_error", None)
+                save_host_state(host_id, hs)
+                updates = [n for n, v in available.items() if v["has_update"]]
+                all_updates.extend([(host_name, n) for n in updates])
+                print(f"[checker:{host_id}] Done — {len(updates)} update(s).")
+            except Exception as e:
+                print(f"[checker:{host_id}] Offline: {e}")
+                hs = load_host_state(host_id)
+                hs["status"]     = "offline"
+                hs["last_error"] = str(e)
+                save_host_state(host_id, hs)
+
+        count = len(all_updates)
+        print(f"[checker] Complete — {count} total update(s).")
 
         if notify and count > 0:
+            # Group by host label for a clean notification body
+            by_host: dict[str, list[str]] = {}
+            for host_label, cname in all_updates:
+                by_host.setdefault(host_label, []).append(cname)
+
+            if len(by_host) == 1:
+                body = ", ".join(sorted(next(iter(by_host.values()))))
+            else:
+                body = "\n".join(
+                    f"{hl}: {', '.join(sorted(names))}"
+                    for hl, names in by_host.items()
+                )
             send_notification(
-                title=f"Docker: {count} update{'s' if count > 1 else ''} available",
-                body=", ".join(sorted(updates)),
+                title=f"Docker: {count} update{'s' if count != 1 else ''} available",
+                body=body,
             )
 
     except Exception as e:
@@ -241,28 +340,40 @@ def check_for_updates(notify: bool = False) -> None:
         _check_lock.release()
 
 
-# ── Container recreation via Docker SDK (Watchtower pattern) ──────────────────
+# ── Container recreation (Watchtower pattern) ─────────────────────────────────
 
-def apply_update(container_name: str) -> None:
-    _update_logs[container_name] = []
-    _update_running.add(container_name)
-    log = _update_logs[container_name]
+def apply_update(container_name: str, host_id: str = "local") -> None:
+    key = _container_key(container_name, host_id)
+    _update_logs[key] = []
+    _update_running.add(key)
+    log = _update_logs[key]
 
     def emit(line: str) -> None:
-        print(f"[update:{container_name}] {line}")
+        print(f"[update:{host_id}:{container_name}] {line}")
         log.append(line)
 
     try:
-        client = docker.from_env()
-        container = client.containers.get(container_name)
-        old_id    = container.id
-        attrs     = container.attrs
-        cfg       = attrs["Config"]
-        hcfg      = attrs["HostConfig"]
-        nets      = attrs["NetworkSettings"]["Networks"]
-        image_name = cfg["Image"]
+        # Resolve Docker client
+        if host_id == "local":
+            client = docker.from_env()
+        else:
+            hosts = load_hosts()
+            host = next((h for h in hosts if h["id"] == host_id), None)
+            if not host:
+                emit(f"\nERROR: Host '{host_id}' not found.")
+                return
+            client = get_docker_client(host.get("url"))
+
+        container   = client.containers.get(container_name)
+        old_id      = container.id
+        attrs       = container.attrs
+        cfg         = attrs["Config"]
+        hcfg        = attrs["HostConfig"]
+        nets        = attrs["NetworkSettings"]["Networks"]
+        image_name  = cfg["Image"]
 
         emit(f"Container : {container_name}")
+        emit(f"Host      : {host_id}")
         emit(f"Image     : {image_name}")
         emit("")
         emit("▶ Pulling latest image...")
@@ -283,23 +394,17 @@ def apply_update(container_name: str) -> None:
         emit("▶ Recreating container...")
 
         network_mode = hcfg.get("NetworkMode", "bridge")
-
         hc = client.api.create_host_config(
             binds=hcfg.get("Binds") or [],
             port_bindings=hcfg.get("PortBindings") or {},
             network_mode=network_mode,
             restart_policy=hcfg.get("RestartPolicy"),
-            cap_add=hcfg.get("CapAdd"),
-            cap_drop=hcfg.get("CapDrop"),
+            cap_add=hcfg.get("CapAdd"), cap_drop=hcfg.get("CapDrop"),
             privileged=hcfg.get("Privileged", False),
-            security_opt=hcfg.get("SecurityOpt"),
-            devices=hcfg.get("Devices"),
-            extra_hosts=hcfg.get("ExtraHosts"),
-            dns=hcfg.get("Dns"),
-            dns_search=hcfg.get("DnsSearch"),
-            volumes_from=hcfg.get("VolumesFrom"),
-            pid_mode=hcfg.get("PidMode") or "",
-            ipc_mode=hcfg.get("IpcMode") or "",
+            security_opt=hcfg.get("SecurityOpt"), devices=hcfg.get("Devices"),
+            extra_hosts=hcfg.get("ExtraHosts"), dns=hcfg.get("Dns"),
+            dns_search=hcfg.get("DnsSearch"), volumes_from=hcfg.get("VolumesFrom"),
+            pid_mode=hcfg.get("PidMode") or "", ipc_mode=hcfg.get("IpcMode") or "",
             tmpfs=hcfg.get("Tmpfs"),
         )
 
@@ -312,14 +417,13 @@ def apply_update(container_name: str) -> None:
         }
 
         simple_net_name = next(iter(full_nets), None)
+        simple_nc = None
         if simple_net_name:
             simple_nc = client.api.create_networking_config({
                 simple_net_name: client.api.create_endpoint_config(
                     aliases=full_nets[simple_net_name]["aliases"] or None
                 )
             })
-        else:
-            simple_nc = None
 
         new_c = client.api.create_container(
             image=image_name, name=container_name,
@@ -336,43 +440,55 @@ def apply_update(container_name: str) -> None:
             if simple_net_name:
                 try:
                     client.api.disconnect_container_from_network(
-                        new_c["Id"], simple_net_name, force=True
-                    )
+                        new_c["Id"], simple_net_name, force=True)
                 except Exception:
                     pass
             for net_name, net_info in full_nets.items():
-                aliases = net_info["aliases"] or None
                 client.api.connect_container_to_network(
-                    new_c["Id"], net_name, aliases=aliases
-                )
+                    new_c["Id"], net_name, aliases=net_info["aliases"] or None)
 
         client.api.start(new_c["Id"])
         emit(f"\nSUCCESS: {container_name} updated and running.")
 
-        with _state_lock:
-            state = load_state()
-            state["available"].pop(container_name, None)
-            state["history"].insert(0, {
-                "container": container_name, "image": image_name,
-                "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
-                "status": "success",
-            })
-            state["history"] = state["history"][:50]
-            save_state(state)
+        history_entry = {
+            "container": container_name, "image": image_name,
+            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "status": "success", "host_id": host_id,
+        }
+        if host_id == "local":
+            with _state_lock:
+                state = load_state()
+                state["available"].pop(container_name, None)
+                state["history"].insert(0, history_entry)
+                state["history"] = state["history"][:50]
+                save_state(state)
+        else:
+            hs = load_host_state(host_id)
+            hs["available"].pop(container_name, None)
+            hs.setdefault("history", []).insert(0, history_entry)
+            hs["history"] = hs["history"][:50]
+            save_host_state(host_id, hs)
 
     except Exception as e:
         emit(f"\nERROR: {e}")
-        with _state_lock:
-            state = load_state()
-            state["history"].insert(0, {
-                "container": container_name, "image": "?",
-                "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
-                "status": f"error: {e}",
-            })
-            state["history"] = state["history"][:50]
-            save_state(state)
+        history_entry = {
+            "container": container_name, "image": "?",
+            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "status": f"error: {e}", "host_id": host_id,
+        }
+        if host_id == "local":
+            with _state_lock:
+                state = load_state()
+                state["history"].insert(0, history_entry)
+                state["history"] = state["history"][:50]
+                save_state(state)
+        else:
+            hs = load_host_state(host_id)
+            hs.setdefault("history", []).insert(0, history_entry)
+            hs["history"] = hs["history"][:50]
+            save_host_state(host_id, hs)
     finally:
-        _update_running.discard(container_name)
+        _update_running.discard(key)
 
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
@@ -386,23 +502,25 @@ def _github_repo_from_labels(labels: dict) -> str | None:
     return None
 
 
-def fetch_changelog(container_name: str) -> dict:
-    client = docker.from_env()
-    container = client.containers.get(container_name)
-    labels = (container.image.attrs.get("Config") or {}).get("Labels") or {}
-    image_name = container.attrs["Config"]["Image"]
+def fetch_changelog(container_name: str, host_id: str = "local") -> dict:
+    if host_id == "local":
+        client = docker.from_env()
+    else:
+        hosts = load_hosts()
+        host = next((h for h in hosts if h["id"] == host_id), None)
+        if not host:
+            return {"error": f"Host '{host_id}' not found.", "releases": []}
+        client = get_docker_client(host.get("url"))
 
-    repo = _github_repo_from_labels(labels)
+    container = client.containers.get(container_name)
+    labels    = (container.image.attrs.get("Config") or {}).get("Labels") or {}
+    image_name = container.attrs["Config"]["Image"]
+    repo       = _github_repo_from_labels(labels)
     source_url = labels.get("org.opencontainers.image.source", "")
 
     if not repo:
-        return {
-            "repo": None,
-            "source_url": source_url or None,
-            "releases": [],
-            "error": "No GitHub source URL found in image labels.",
-        }
-
+        return {"repo": None, "source_url": source_url or None, "releases": [],
+                "error": "No GitHub source URL found in image labels."}
     try:
         r = requests.get(
             f"https://api.github.com/repos/{repo}/releases",
@@ -416,7 +534,6 @@ def fetch_changelog(container_name: str) -> dict:
         if r.status_code != 200:
             return {"repo": repo, "source_url": source_url, "releases": [],
                     "error": f"GitHub API error {r.status_code}."}
-
         releases = []
         for rel in r.json()[:5]:
             releases.append({
@@ -428,7 +545,6 @@ def fetch_changelog(container_name: str) -> dict:
                 "prerelease": rel.get("prerelease", False),
             })
         return {"repo": repo, "source_url": source_url, "releases": releases}
-
     except Exception as e:
         return {"repo": repo, "source_url": source_url, "releases": [], "error": str(e)}
 
@@ -438,77 +554,63 @@ def fetch_changelog(container_name: str) -> dict:
 @app.route("/webhook/github", methods=["POST"])
 def webhook_github():
     if GITHUB_WEBHOOK_SECRET:
-        sig = request.headers.get("X-Hub-Signature-256", "")
+        sig      = request.headers.get("X-Hub-Signature-256", "")
         expected = "sha256=" + hmac.new(
             GITHUB_WEBHOOK_SECRET.encode(), request.data, hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(sig, expected):
-            print("[github] Rejected webhook — bad signature")
             return jsonify({"error": "Invalid signature"}), 401
 
     event   = request.headers.get("X-GitHub-Event", "")
     payload = request.get_json(silent=True) or {}
     repo    = payload.get("repository", {}).get("full_name", "unknown")
-
-    title = body = None
+    title   = body = None
 
     if event == "issues":
         action = payload.get("action", "")
         issue  = payload.get("issue", {})
         if action == "opened":
-            sender = payload.get("sender", {}).get("login", "someone")
-            title  = f"🐛 New issue — {repo}"
-            body   = f"#{issue.get('number')}: {issue.get('title')}\nOpened by {sender}\n{issue.get('html_url', '')}"
+            title = f"🐛 New issue — {repo}"
+            body  = f"#{issue.get('number')}: {issue.get('title')}\nOpened by {payload.get('sender',{}).get('login','someone')}\n{issue.get('html_url','')}"
         elif action == "closed":
             title = f"✅ Issue closed — {repo}"
             body  = f"#{issue.get('number')}: {issue.get('title')}"
-
     elif event == "pull_request":
         action = payload.get("action", "")
         pr     = payload.get("pull_request", {})
         if action == "opened":
-            sender = payload.get("sender", {}).get("login", "someone")
-            title  = f"🔀 New PR — {repo}"
-            body   = f"#{pr.get('number')}: {pr.get('title')}\nOpened by {sender}\n{pr.get('html_url', '')}"
+            title = f"🔀 New PR — {repo}"
+            body  = f"#{pr.get('number')}: {pr.get('title')}\nOpened by {payload.get('sender',{}).get('login','someone')}\n{pr.get('html_url','')}"
         elif action == "closed" and pr.get("merged"):
             title = f"✅ PR merged — {repo}"
             body  = f"#{pr.get('number')}: {pr.get('title')}"
-
     elif event == "watch":
         if payload.get("action") == "started":
-            sender = payload.get("sender", {}).get("login", "someone")
-            stars  = payload.get("repository", {}).get("stargazers_count", "?")
-            title  = f"⭐ New star — {repo}"
-            body   = f"{sender} starred the repo ({stars} total)"
-
+            title = f"⭐ New star — {repo}"
+            body  = f"{payload.get('sender',{}).get('login','someone')} starred ({payload.get('repository',{}).get('stargazers_count','?')} total)"
     elif event == "push":
         branch = payload.get("ref", "").replace("refs/heads/", "")
         if branch in ("main", "master"):
             commits = payload.get("commits", [])
-            pusher  = payload.get("pusher", {}).get("name", "someone")
             title   = f"📦 Push to {branch} — {repo}"
-            body    = f"{pusher} pushed {len(commits)} commit{'s' if len(commits) != 1 else ''}"
+            body    = f"{payload.get('pusher',{}).get('name','someone')} pushed {len(commits)} commit{'s' if len(commits)!=1 else ''}"
             if commits:
-                body += f"\n↳ {commits[-1].get('message', '').splitlines()[0]}"
-
+                body += f"\n↳ {commits[-1].get('message','').splitlines()[0]}"
     elif event == "release":
         if payload.get("action") == "published":
             rel   = payload.get("release", {})
             title = f"🚀 New release — {repo}"
-            body  = f"{rel.get('tag_name', '')}: {rel.get('name', '')}\n{rel.get('html_url', '')}"
-
+            body  = f"{rel.get('tag_name','')}: {rel.get('name','')}\n{rel.get('html_url','')}"
     elif event == "issue_comment":
         if payload.get("action") == "created":
             issue   = payload.get("issue", {})
             comment = payload.get("comment", {})
-            sender  = payload.get("sender", {}).get("login", "someone")
             title   = f"💬 Comment — {repo}"
-            body    = f"#{issue.get('number')}: {issue.get('title')}\n{sender}: {comment.get('body', '')[:120]}"
+            body    = f"#{issue.get('number')}: {issue.get('title')}\n{payload.get('sender',{}).get('login','someone')}: {comment.get('body','')[:120]}"
 
     if title and body:
         print(f"[github] {event} → {title}")
         send_notification(title, body)
-
     return jsonify({"ok": True})
 
 
@@ -521,10 +623,12 @@ def index():
 
 @app.route("/api/status")
 def api_status():
+    today = datetime.date.today().isoformat()
+
+    # ── Local state ────────────────────────────────────────────────────────────
     with _state_lock:
         state = load_state()
 
-    today = datetime.date.today().isoformat()
     expired = [n for n, d in state.get("deferred", {}).items()
                if d.get("until", "") <= today]
     if expired:
@@ -533,51 +637,106 @@ def api_status():
             for n in expired:
                 s["deferred"].pop(n, None)
             save_state(s)
-        state = load_state()
+        with _state_lock:
+            state = load_state()
 
     containers = []
     try:
         client = docker.from_env()
         for container in client.containers.list():
-            name = container.name
+            name       = container.name
             image_name = container.attrs["Config"]["Image"]
             if is_locally_built(container):
                 continue
-            info = state["available"].get(name, {})
+            info  = state["available"].get(name, {})
             defer = state["deferred"].get(name)
             is_deferred = bool(defer and defer.get("until", "") > today)
-
             if info:
-                if info.get("has_update") and not is_deferred:
-                    status = "update"
-                elif is_deferred:
-                    status = "deferred"
-                else:
-                    status = "ok"
+                status = "update" if info.get("has_update") and not is_deferred else (
+                         "deferred" if is_deferred else "ok")
             else:
                 status = "unknown"
-
+            key = name  # local uses plain name
             containers.append({
                 "name": name, "image": image_name, "status": status,
                 "defer_until": defer.get("until") if is_deferred else None,
                 "checked_at": info.get("checked_at"),
-                "updating": name in _update_running,
-                "has_logs": name in _update_logs,
+                "updating": key in _update_running,
+                "has_logs": key in _update_logs,
                 "has_changelog": _has_changelog(container),
+                "host_id": "local", "host_name": "Local",
             })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    # ── Remote hosts (from cached state — no live Docker calls) ───────────────
+    remote_hosts_info = []
+    all_history = list(state.get("history", []))
+
+    for host in load_hosts():
+        host_id   = host["id"]
+        host_name = host["name"]
+        hs        = load_host_state(host_id)
+        host_status = hs.get("status", "unknown")
+
+        remote_hosts_info.append({
+            "id": host_id, "name": host_name,
+            "url": host.get("url", ""),
+            "status": host_status,
+            "last_check": hs.get("last_check"),
+            "last_error": hs.get("last_error"),
+        })
+
+        # Expire deferred for this host
+        h_deferred = hs.get("deferred", {})
+        h_expired  = [n for n, d in h_deferred.items() if d.get("until","") <= today]
+        if h_expired:
+            for n in h_expired:
+                h_deferred.pop(n, None)
+            hs["deferred"] = h_deferred
+            save_host_state(host_id, hs)
+
+        for cname, cinfo in hs.get("available", {}).items():
+            defer = h_deferred.get(cname)
+            is_deferred_c = bool(defer and defer.get("until", "") > today)
+            has_update = cinfo.get("has_update", False)
+            if has_update and not is_deferred_c:
+                cstatus = "update"
+            elif is_deferred_c:
+                cstatus = "deferred"
+            else:
+                cstatus = "ok"
+            key = _container_key(cname, host_id)
+            containers.append({
+                "name": cname, "image": cinfo.get("image", ""),
+                "status": cstatus,
+                "defer_until": defer.get("until") if is_deferred_c else None,
+                "checked_at": cinfo.get("checked_at"),
+                "updating": key in _update_running,
+                "has_logs": key in _update_logs,
+                "has_changelog": False,
+                "host_id": host_id, "host_name": host_name,
+            })
+
+        all_history.extend(hs.get("history", []))
+
     ORDER = {"update": 0, "deferred": 1, "unknown": 2, "ok": 3}
-    containers.sort(key=lambda c: (ORDER.get(c["status"], 9), c["name"]))
+    containers.sort(key=lambda c: (ORDER.get(c["status"], 9), c["host_name"], c["name"]))
+    all_history.sort(key=lambda h: h.get("updated_at", ""), reverse=True)
+
+    hosts_full = [{"id": "local", "name": "Local",
+                   "url": "unix:///var/run/docker.sock",
+                   "status": "online", "last_check": state.get("last_check")}
+                  ] + remote_hosts_info
 
     return jsonify({
-        "containers": containers,
-        "last_check": state.get("last_check"),
+        "containers":   containers,
+        "last_check":   state.get("last_check"),
         "check_running": _check_running,
-        "history": state.get("history", [])[:20],
-        "next_check": _next_check_time(),
-        "notify": get_notify_info(),
+        "history":      all_history[:20],
+        "next_check":   _next_check_time(),
+        "notify":       get_notify_info(),
+        "hosts":        hosts_full,
     })
 
 
@@ -589,50 +748,126 @@ def api_check():
 
 @app.route("/api/update/<name>", methods=["POST"])
 def api_update(name):
-    if name in _update_running:
+    host_id = request.args.get("host", "local")
+    key = _container_key(name, host_id)
+    if key in _update_running:
         return jsonify({"error": "Already updating"}), 409
-    threading.Thread(target=apply_update, args=(name,), daemon=True).start()
+    threading.Thread(target=apply_update, args=(name, host_id), daemon=True).start()
     return jsonify({"ok": True})
 
 
 @app.route("/api/defer/<name>", methods=["POST"])
 def api_defer(name):
-    data = request.get_json() or {}
-    days = int(data.get("days", 7))
-    until = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
-    with _state_lock:
-        state = load_state()
-        state["deferred"][name] = {"until": until}
-        save_state(state)
+    host_id = request.args.get("host", "local")
+    data    = request.get_json() or {}
+    days    = int(data.get("days", 7))
+    until   = (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+    if host_id == "local":
+        with _state_lock:
+            state = load_state()
+            state["deferred"][name] = {"until": until}
+            save_state(state)
+    else:
+        hs = load_host_state(host_id)
+        hs.setdefault("deferred", {})[name] = {"until": until}
+        save_host_state(host_id, hs)
     return jsonify({"ok": True, "until": until})
 
 
 @app.route("/api/undefer/<name>", methods=["POST"])
 def api_undefer(name):
-    with _state_lock:
-        state = load_state()
-        state["deferred"].pop(name, None)
-        save_state(state)
+    host_id = request.args.get("host", "local")
+    if host_id == "local":
+        with _state_lock:
+            state = load_state()
+            state["deferred"].pop(name, None)
+            save_state(state)
+    else:
+        hs = load_host_state(host_id)
+        hs.get("deferred", {}).pop(name, None)
+        save_host_state(host_id, hs)
     return jsonify({"ok": True})
 
 
 @app.route("/api/logs/<name>")
 def api_logs(name):
-    return jsonify({
-        "logs": _update_logs.get(name, []),
-        "running": name in _update_running,
-    })
+    host_id = request.args.get("host", "local")
+    key     = _container_key(name, host_id)
+    # backwards compat: also check plain name for existing local logs
+    logs    = _update_logs.get(key) or _update_logs.get(name, [])
+    running = key in _update_running or name in _update_running
+    return jsonify({"logs": logs, "running": running})
 
 
 @app.route("/api/changelog/<name>")
 def api_changelog(name):
+    host_id = request.args.get("host", "local")
     try:
-        return jsonify(fetch_changelog(name))
+        return jsonify(fetch_changelog(name, host_id))
     except Exception as e:
         return jsonify({"error": str(e), "releases": []}), 500
 
 
-# ── Scheduler helpers ─────────────────────────────────────────────────────────
+# ── Host management routes ────────────────────────────────────────────────────
+
+@app.route("/api/hosts", methods=["GET"])
+def api_hosts_list():
+    hosts = load_hosts()
+    result = []
+    for h in hosts:
+        hs = load_host_state(h["id"])
+        result.append({**h, "status": hs.get("status", "unknown"),
+                       "last_check": hs.get("last_check"),
+                       "last_error": hs.get("last_error")})
+    return jsonify({"hosts": result})
+
+
+@app.route("/api/hosts", methods=["POST"])
+def api_hosts_add():
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    url  = data.get("url", "").strip()
+    if not name or not url:
+        return jsonify({"error": "name and url are required"}), 400
+    hosts  = load_hosts()
+    host_id = re.sub(r"[^a-z0-9_-]", "-", name.lower())[:32]
+    # ensure unique id
+    existing_ids = {h["id"] for h in hosts}
+    base_id, i = host_id, 1
+    while host_id in existing_ids:
+        host_id = f"{base_id}-{i}"; i += 1
+    hosts.append({"id": host_id, "name": name, "url": url})
+    save_hosts(hosts)
+    return jsonify({"ok": True, "id": host_id})
+
+
+@app.route("/api/hosts/<host_id>", methods=["DELETE"])
+def api_hosts_delete(host_id):
+    hosts = [h for h in load_hosts() if h["id"] != host_id]
+    save_hosts(hosts)
+    # clean up state file
+    path = os.path.join(HOSTS_STATE_DIR, f"{host_id}.json")
+    if os.path.exists(path):
+        os.remove(path)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/hosts/<host_id>/test", methods=["POST"])
+def api_hosts_test(host_id):
+    hosts = load_hosts()
+    host  = next((h for h in hosts if h["id"] == host_id), None)
+    if not host:
+        return jsonify({"error": "Host not found"}), 404
+    try:
+        client = get_docker_client(host.get("url"))
+        info   = client.info()
+        return jsonify({"ok": True, "version": info.get("ServerVersion", "?"),
+                        "containers": info.get("Containers", "?")})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
 
 _scheduler: BackgroundScheduler | None = None
 
@@ -642,7 +877,7 @@ def _next_check_time() -> str | None:
         return None
     try:
         job = _scheduler.get_jobs()[0]
-        nf = job.next_run_time
+        nf  = job.next_run_time
         return nf.isoformat() if nf else None
     except Exception:
         return None
@@ -657,13 +892,11 @@ if __name__ == "__main__":
     _scheduler.add_job(
         check_for_updates, "cron",
         hour=check_hour, minute=check_minute,
-        timezone=TIMEZONE,
-        kwargs={"notify": True},
+        timezone=TIMEZONE, kwargs={"notify": True},
     )
     _scheduler.start()
     print(f"[scheduler] Daily check scheduled at {CHECK_TIME} {TIMEZONE}")
 
-    # Ensure notify URL is initialised and log it
     notify_info = get_notify_info()
     if notify_info:
         prefix = "Auto-generated" if notify_info["auto"] else "Configured"
@@ -671,6 +904,11 @@ if __name__ == "__main__":
 
     if GITHUB_WEBHOOK_SECRET:
         print(f"[github] Webhook endpoint active at /webhook/github")
+
+    remote_hosts = load_hosts()
+    if remote_hosts:
+        print(f"[hosts] {len(remote_hosts)} remote host(s) configured: "
+              f"{', '.join(h['name'] for h in remote_hosts)}")
 
     threading.Thread(target=check_for_updates, args=(False,), daemon=True).start()
     app.run(host="0.0.0.0", port=9090, debug=False, threaded=True)
