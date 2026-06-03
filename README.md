@@ -197,10 +197,12 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
 4. If the digests differ, the container is flagged as having an update available
 5. When you click **Update**, the app:
    - Pulls the new image (streaming progress to the log modal)
-   - Stops and removes the old container, waiting up to 30 seconds for Docker to confirm removal (handles slow cleanup of large images)
-   - Recreates it with identical config using the Docker SDK low-level API (Watchtower pattern)
+   - Stops the old container and renames it to `{name}_old` (kept as a rollback target)
+   - Creates and starts the new container with identical config using the Docker SDK low-level API (Watchtower pattern)
    - Reconnects all networks via `NetworkConnect` to ensure correct port binding and iptables setup
-   - Starts the new container
+   - Waits 2 seconds and checks the new container is still running
+   - **On success**: removes the `_old` container
+   - **On failure**: removes the failed new container, renames `_old` back, and restarts the previous version
 
 Container state (update availability, defer decisions, history) is persisted to `data/state.json`.
 
