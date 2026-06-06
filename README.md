@@ -29,6 +29,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **Scheduled checks** — cron-style daily check at a configurable time and timezone; notifications only fire on the scheduled run, not on startup or manual checks
 - **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), preserving all original config: volumes, ports, environment variables, networks, static IPs, restart policy, capabilities, etc.
 - **Backup & rollback** — optionally keep the previous container after a successful update for a configurable window (Settings tab); roll back to it in one click if the new version misbehaves, or delete the backup early to reclaim space
+- **Crash-safe** — if docker-updater is restarted mid-update/rollback, it reconciles leftover backups on startup and restores any service left down
 - **Locally-built images skipped** — containers with no `RepoDigests` (built from local Dockerfiles) are automatically ignored
 - **Persistent state** — update history, deferred decisions, and last-check timestamps survive container restarts
 - **Dark UI** — tabbed dashboard: Updates / Deferred / Backups / Up to Date / Unchecked / All / Hosts / Settings
@@ -230,6 +231,17 @@ Sometimes a new image starts up perfectly cleanly, and only later do you discove
 For that extra peace of mind, enable **Keep backup after successful update** in the **Settings** tab. When it's on, the previous container is kept (stopped) after a *successful* update for a configurable window (default 24 hours) instead of being removed. If you hit a problem afterwards, open the **Backups** tab and click **Rollback** to instantly restore the previous version — even though the update "succeeded". Finished with a backup early? **Delete backup** removes it and reclaims the disk space.
 
 Backups are self-managing: each entry is verified against its actual `_old` container, and expired or orphaned entries are cleaned up automatically — so the Backups tab always reflects what's really there.
+
+### Crash-safe (startup recovery)
+
+Updates and rollbacks run in a background thread. If docker-updater is restarted *while one is in progress* (a manual restart, a host reboot, even its own self-update), that thread is killed mid-flight — which could otherwise leave a container half-updated or stopped.
+
+To guard against this, docker-updater scans for leftover `{name}_old` backup containers on every startup and reconciles each one:
+
+- **New container is running** → it's kept; the backup is preserved (if retention is on) or cleaned up (if off).
+- **Primary is missing or not running** → the previous version is automatically restored from the backup and started.
+
+So an interrupted operation self-heals on the next start instead of leaving a service down.
 
 ---
 

@@ -1188,6 +1188,89 @@ def _next_check_time() -> str | None:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def recover_interrupted_operations() -> None:
+    """On startup, reconcile any '<name>_old' containers left behind by an update
+    or rollback that was interrupted (e.g. docker-updater itself was restarted
+    mid-operation). Local host only. Goal: never leave a managed service down or
+    half-updated. The '_old' naming convention is the signal an op was in flight."""
+    try:
+        client = docker.from_env()
+    except Exception as e:
+        print(f"[recover] Docker unavailable, skipping recovery: {e}")
+        return
+    try:
+        olds = [c for c in client.containers.list(all=True) if c.name.endswith("_old")]
+    except Exception as e:
+        print(f"[recover] Could not list containers: {e}")
+        return
+    if not olds:
+        return
+
+    now = datetime.datetime.utcnow()
+    now_iso = now.isoformat() + "Z"
+    with _state_lock:
+        state = load_state()
+    backup_enabled = state.get("backup_enabled", False)
+    backup_hours   = int(state.get("backup_hours", 24))
+    rollbacks      = state.setdefault("rollbacks", {})
+    history        = state.setdefault("history", [])
+    changed = False
+
+    for old in olds:
+        base = old.name[:-4]  # strip "_old"
+        try:
+            try:
+                primary = client.containers.get(base)
+            except docker.errors.NotFound:
+                primary = None
+            rb = rollbacks.get(base)
+            rb_valid = bool(rb and rb.get("expires_at", "") > now_iso)
+
+            if primary is not None and primary.status == "running":
+                # New version is up and healthy.
+                if rb_valid:
+                    continue  # normal retained backup -- leave alone
+                if backup_enabled:
+                    rollbacks[base] = {
+                        "backed_up_at": now_iso,
+                        "expires_at": (now + datetime.timedelta(hours=backup_hours)).isoformat() + "Z",
+                    }
+                    changed = True
+                    print(f"[recover] Adopted orphan backup '{old.name}' (primary running, no valid state entry)")
+                else:
+                    old.remove(force=True)
+                    rollbacks.pop(base, None)
+                    changed = True
+                    print(f"[recover] Removed orphan backup '{old.name}' (retention off)")
+                continue
+
+            # Primary missing or not running: restore the known-good previous version.
+            if primary is not None:
+                print(f"[recover] Removing half-created/stopped '{base}' (status={primary.status})")
+                try:
+                    primary.remove(force=True)
+                except Exception as e:
+                    print(f"[recover] Could not remove '{base}': {e}; skipping")
+                    continue
+            old.rename(base)
+            client.containers.get(base).start()
+            rollbacks.pop(base, None)
+            history.insert(0, {
+                "container": base, "image": "↩ recovered",
+                "updated_at": now_iso, "status": "success", "host_id": "local",
+            })
+            changed = True
+            print(f"[recover] Restored '{base}' from an interrupted operation")
+        except Exception as e:
+            print(f"[recover] Failed to recover '{old.name}': {e}")
+
+    if changed:
+        state["history"] = history[:50]
+        with _state_lock:
+            save_state(state)
+    print(f"[recover] Scan complete -- examined {len(olds)} backup container(s).")
+
+
 if __name__ == "__main__":
     check_hour, check_minute = map(int, CHECK_TIME.split(":"))
 
@@ -1212,6 +1295,9 @@ if __name__ == "__main__":
     if remote_hosts:
         print(f"[hosts] {len(remote_hosts)} remote host(s) configured: "
               f"{', '.join(h['name'] for h in remote_hosts)}")
+
+    print("[recover] Checking for interrupted operations...")
+    recover_interrupted_operations()
 
     threading.Thread(target=check_for_updates, args=(False,), daemon=True).start()
     app.run(host="0.0.0.0", port=9090, debug=False, threaded=True)
