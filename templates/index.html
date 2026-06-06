@@ -36,8 +36,9 @@
   .btn-link      { background:transparent; color:var(--blue); padding:0; font-size:12px; text-decoration:underline; text-underline-offset:2px; }
   .btn-link:hover { filter:none; opacity:.8; }
 
-  .tabs { display:flex; gap:4px; padding:12px 24px 0; border-bottom:1px solid var(--border); background:var(--surface); }
-  .tab { padding:6px 14px; border-radius:6px 6px 0 0; cursor:pointer; font-size:13px; color:var(--muted); border:1px solid transparent; border-bottom:none; background:transparent; position:relative; bottom:-1px; }
+  .tabs { display:flex; gap:4px; padding:12px 24px 0; border-bottom:1px solid var(--border); background:var(--surface); flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  .tabs::-webkit-scrollbar { display:none; }
+  .tab { padding:6px 14px; border-radius:6px 6px 0 0; cursor:pointer; font-size:13px; color:var(--muted); border:1px solid transparent; border-bottom:none; background:transparent; position:relative; bottom:-1px; white-space:nowrap; flex-shrink:0; }
   .tab:hover { color:var(--text); background:var(--surface2); }
   .tab.active { color:var(--text); background:var(--bg); border-color:var(--border); }
   .tab .badge { display:inline-block; background:var(--surface2); border-radius:10px; padding:0 6px; font-size:11px; margin-left:4px; color:var(--muted); }
@@ -186,6 +187,13 @@
   #checking-banner.visible { display:flex; }
   #notify-banner { display:none; background:rgba(63,185,80,.08); border:1px solid rgba(63,185,80,.25); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--green); align-items:center; gap:10px; flex-wrap:wrap; }
   #notify-banner.visible { display:flex; }
+  @media (max-width: 640px) {
+    header { padding:12px 14px; }
+    .header-row { gap:10px; }
+    .tabs { padding:10px 12px 0; gap:2px; }
+    .tab { padding:6px 10px; font-size:12px; }
+    main { padding:16px 12px 60px; }
+  }
 </style>
 </head>
 <body>
