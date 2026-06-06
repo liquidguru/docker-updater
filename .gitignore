@@ -5,3 +5,7 @@ __pycache__/
 .env
 *.egg-info/
 .DS_Store
+
+# Synology DSM artifacts
+@eaDir/
+**/@eaDir/

@@ -59,7 +59,7 @@ def load_state() -> dict:
         except Exception:
             pass
     return {"available": {}, "deferred": {}, "history": [], "last_check": None,
-            "notify_url": None}
+            "notify_url": None, "rollbacks": {}, "backup_enabled": False, "backup_hours": 24}
 
 
 def save_state(state: dict) -> None:
@@ -344,6 +344,23 @@ def check_for_updates(notify: bool = False) -> None:
 
 # ── Container recreation (Watchtower pattern) ─────────────────────────────────
 
+def _exposed_ports(cfg: dict) -> list:
+    """Convert a container's ExposedPorts dict ({"7575/tcp": {}}) into the
+    (port, proto) tuples docker-py's create_container expects. Passing the raw
+    "PORT/proto" strings makes docker-py re-append the protocol, producing a
+    bogus "PORT/proto/proto" exposed port that no longer matches PortBindings,
+    which silently breaks host-port publishing on user-defined networks."""
+    out = []
+    for key in (cfg.get("ExposedPorts") or {}).keys():
+        port, _, proto = key.partition("/")
+        try:
+            port = int(port)
+        except ValueError:
+            pass
+        out.append((port, proto or "tcp"))
+    return out
+
+
 def apply_update(container_name: str, host_id: str = "local") -> None:
     key = _container_key(container_name, host_id)
     with _logs_lock:
@@ -408,6 +425,12 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         container.rename(old_name)
         old_container = client.containers.get(old_name)
 
+        # Read backup setting before recreation so we know what to do on success
+        with _state_lock:
+            _bst = load_state()
+        _backup_enabled = _bst.get("backup_enabled", False)
+        _backup_hours   = int(_bst.get("backup_hours", 24))
+
         emit("▶ Recreating container...")
 
         network_mode = hcfg.get("NetworkMode", "bridge")
@@ -456,18 +479,19 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                 entrypoint=cfg.get("Entrypoint"), labels=cfg.get("Labels"),
                 volumes=list((cfg.get("Volumes") or {}).keys()) or None,
                 working_dir=cfg.get("WorkingDir", ""),
-                ports=list((cfg.get("ExposedPorts") or {}).keys()) or None,
+                ports=_exposed_ports(cfg) or None,
                 host_config=hc, networking_config=simple_nc,
             )
 
+            # The primary network (simple_net_name) is already attached at create
+            # time via networking_config, carrying its static IP and aliases, and
+            # NetworkMode matches it so published ports bind correctly. Only
+            # connect any *additional* networks here — never disconnect/reconnect
+            # the primary, as that tears down port publishing on user-defined nets.
             if network_mode != "host" and full_nets:
-                if simple_net_name:
-                    try:
-                        client.api.disconnect_container_from_network(
-                            new_c["Id"], simple_net_name, force=True)
-                    except Exception:
-                        pass
                 for net_name, net_info in full_nets.items():
+                    if net_name == simple_net_name:
+                        continue
                     client.api.connect_container_to_network(
                         new_c["Id"], net_name,
                         aliases=net_info["aliases"] or None,
@@ -486,8 +510,12 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                     "Check logs for startup errors."
                 )
 
-            emit("▶ Removing old container...")
-            old_container.remove()
+            if _backup_enabled:
+                _expires = (datetime.datetime.utcnow() + datetime.timedelta(hours=_backup_hours)).isoformat() + "Z"
+                emit(f"  Backup '{old_name}' kept for {_backup_hours}h — rollback available.")
+            else:
+                emit("▶ Removing old container...")
+                old_container.remove()
             emit(f"\nSUCCESS: {container_name} updated and running.")
 
         except Exception as recreate_err:
@@ -517,18 +545,30 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
             "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
             "status": "success", "host_id": host_id,
         }
+        rollback_entry = {
+            "backed_up_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "expires_at": _expires,
+        } if _backup_enabled else None
         if host_id == "local":
             with _state_lock:
                 state = load_state()
                 state["available"].pop(container_name, None)
                 state["history"].insert(0, history_entry)
                 state["history"] = state["history"][:50]
+                if rollback_entry:
+                    state.setdefault("rollbacks", {})[container_name] = rollback_entry
+                else:
+                    state.setdefault("rollbacks", {}).pop(container_name, None)
                 save_state(state)
         else:
             hs = load_host_state(host_id)
             hs["available"].pop(container_name, None)
             hs.setdefault("history", []).insert(0, history_entry)
             hs["history"] = hs["history"][:50]
+            if rollback_entry:
+                hs.setdefault("rollbacks", {})[container_name] = rollback_entry
+            else:
+                hs.setdefault("rollbacks", {}).pop(container_name, None)
             save_host_state(host_id, hs)
 
     except Exception as e:
@@ -549,6 +589,74 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
             hs.setdefault("history", []).insert(0, history_entry)
             hs["history"] = hs["history"][:50]
             save_host_state(host_id, hs)
+    finally:
+        with _logs_lock:
+            _update_running.discard(key)
+
+
+# ── Rollback ─────────────────────────────────────────────────────────────────
+
+def apply_rollback(container_name: str, host_id: str = "local") -> None:
+    key = _container_key(container_name, host_id)
+    with _logs_lock:
+        _update_logs[key] = []
+        _update_running.add(key)
+    log = _update_logs[key]
+
+    def emit(line: str) -> None:
+        print(f"[rollback:{host_id}:{container_name}] {line}")
+        log.append(line)
+
+    try:
+        if host_id == "local":
+            client = docker.from_env()
+        else:
+            hosts = load_hosts()
+            host = next((h for h in hosts if h["id"] == host_id), None)
+            if not host:
+                emit(f"\nERROR: Host '{host_id}' not found.")
+                return
+            client = get_docker_client(host.get("url"))
+
+        old_name = f"{container_name}_old"
+        emit(f"Container : {container_name}")
+        emit(f"Host      : {host_id}")
+        emit("")
+        emit("▶ Stopping current container...")
+        try:
+            current = client.containers.get(container_name)
+            current.stop(timeout=30)
+            current.remove()
+        except docker.errors.NotFound:
+            emit("  Current container not found, continuing...")
+
+        emit("▶ Restoring previous container...")
+        old_container = client.containers.get(old_name)
+        old_container.rename(container_name)
+        old_container.start()
+        emit(f"\nSUCCESS: {container_name} rolled back to previous version.")
+
+        history_entry = {
+            "container": container_name, "image": "↩ rollback",
+            "updated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "status": "success", "host_id": host_id,
+        }
+        if host_id == "local":
+            with _state_lock:
+                state = load_state()
+                state.setdefault("rollbacks", {}).pop(container_name, None)
+                state["history"].insert(0, history_entry)
+                state["history"] = state["history"][:50]
+                save_state(state)
+        else:
+            hs = load_host_state(host_id)
+            hs.setdefault("rollbacks", {}).pop(container_name, None)
+            hs.setdefault("history", []).insert(0, history_entry)
+            hs["history"] = hs["history"][:50]
+            save_host_state(host_id, hs)
+
+    except Exception as e:
+        emit(f"\nERROR: {e}")
     finally:
         with _logs_lock:
             _update_running.discard(key)
@@ -723,6 +831,16 @@ def api_status():
             with _logs_lock:
                 is_updating = key in _update_running
                 has_logs    = key in _update_logs
+            now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+            rb = state.get("rollbacks", {}).get(name)
+            has_rollback = bool(rb and rb.get("expires_at", "") > now_iso)
+            if has_rollback:
+                try:
+                    client.containers.get(f"{name}_old")
+                except docker.errors.NotFound:
+                    has_rollback = False
+                except Exception:
+                    pass
             containers.append({
                 "name": name, "image": image_name, "status": status,
                 "defer_until": defer.get("until") if is_deferred else None,
@@ -730,6 +848,8 @@ def api_status():
                 "updating": is_updating,
                 "has_logs": has_logs,
                 "has_changelog": _has_changelog(container),
+                "has_rollback": has_rollback,
+                "rollback_expires": rb.get("expires_at") if has_rollback else None,
                 "host_id": "local", "host_name": "Local",
             })
     except Exception as e:
@@ -789,6 +909,46 @@ def api_status():
 
         all_history.extend(hs.get("history", []))
 
+    # Clean up rollback backups: purge entries that are expired (remove the
+    # _old container) or orphaned (the _old container no longer exists, e.g.
+    # an interrupted rollback). Keeps the Backups tab in sync with reality.
+    now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+    with _state_lock:
+        _cleanup_state = load_state()
+    _cleanup_client = None
+    try:
+        _cleanup_client = docker.from_env()
+    except Exception as _ce:
+        print(f"[cleanup] Docker unavailable: {_ce}")
+    _stale_rbs = []
+    if _cleanup_client is not None:
+        for _rb_name, _rb in _cleanup_state.get("rollbacks", {}).items():
+            _expired = _rb.get("expires_at", "") <= now_iso
+            _old_c = None
+            try:
+                _old_c = _cleanup_client.containers.get(f"{_rb_name}_old")
+                _old_exists = True
+            except docker.errors.NotFound:
+                _old_exists = False
+            except Exception:
+                _old_exists = True  # transient error: do not purge
+            if not _old_exists:
+                print(f"[cleanup] Purging stale rollback (no {_rb_name}_old): {_rb_name}")
+                _stale_rbs.append(_rb_name)
+            elif _expired:
+                try:
+                    _old_c.remove()
+                    print(f"[cleanup] Removed expired backup: {_rb_name}_old")
+                    _stale_rbs.append(_rb_name)
+                except Exception as _re:
+                    print(f"[cleanup] Error removing {_rb_name}_old: {_re}")
+    if _stale_rbs:
+        with _state_lock:
+            _cs = load_state()
+            for _rb_name in _stale_rbs:
+                _cs.get("rollbacks", {}).pop(_rb_name, None)
+            save_state(_cs)
+
     ORDER = {"update": 0, "deferred": 1, "unknown": 2, "ok": 3}
     containers.sort(key=lambda c: (ORDER.get(c["status"], 9), c["host_name"], c["name"]))
     all_history.sort(key=lambda h: h.get("updated_at", ""), reverse=True)
@@ -823,6 +983,79 @@ def api_update(name):
         if key in _update_running:
             return jsonify({"error": "Already updating"}), 409
     threading.Thread(target=apply_update, args=(name, host_id), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/rollback/<name>", methods=["POST"])
+def api_rollback(name):
+    host_id = request.args.get("host", "local")
+    key = _container_key(name, host_id)
+    with _logs_lock:
+        if key in _update_running:
+            return jsonify({"error": "Operation already in progress"}), 409
+    threading.Thread(target=apply_rollback, args=(name, host_id), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/backup/<name>", methods=["DELETE"])
+def api_backup_delete(name):
+    """Manually delete a kept backup (the <name>_old container) and clear its
+    rollback entry, letting users reclaim disk space before retention expiry."""
+    host_id = request.args.get("host", "local")
+    key = _container_key(name, host_id)
+    with _logs_lock:
+        if key in _update_running:
+            return jsonify({"error": "Operation in progress — try again shortly."}), 409
+    old_name = f"{name}_old"
+    try:
+        if host_id == "local":
+            client = docker.from_env()
+        else:
+            host = next((h for h in load_hosts() if h["id"] == host_id), None)
+            if not host:
+                return jsonify({"error": f"Host '{host_id}' not found."}), 404
+            client = get_docker_client(host.get("url"))
+    except Exception as e:
+        return jsonify({"error": f"Docker unavailable: {e}"}), 500
+    try:
+        client.containers.get(old_name).remove(force=True)
+        print(f"[backup] Deleted backup container {old_name}")
+    except docker.errors.NotFound:
+        pass
+    except Exception as e:
+        return jsonify({"error": f"Could not remove {old_name}: {e}"}), 500
+    if host_id == "local":
+        with _state_lock:
+            state = load_state()
+            state.setdefault("rollbacks", {}).pop(name, None)
+            save_state(state)
+    else:
+        hs = load_host_state(host_id)
+        hs.setdefault("rollbacks", {}).pop(name, None)
+        save_host_state(host_id, hs)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_settings_get():
+    with _state_lock:
+        state = load_state()
+    return jsonify({
+        "backup_enabled": state.get("backup_enabled", False),
+        "backup_hours":   state.get("backup_hours", 24),
+    })
+
+
+@app.route("/api/settings", methods=["POST"])
+def api_settings_post():
+    data = request.get_json() or {}
+    with _state_lock:
+        state = load_state()
+        if "backup_enabled" in data:
+            state["backup_enabled"] = bool(data["backup_enabled"])
+        if "backup_hours" in data:
+            state["backup_hours"] = int(data["backup_hours"])
+        save_state(state)
     return jsonify({"ok": True})
 
 

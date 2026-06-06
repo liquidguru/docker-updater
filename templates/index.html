@@ -148,7 +148,41 @@
   .release-body a { color:var(--blue); }
   .changelog-github-link { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--blue); margin-left:auto; }
 
+  /* Settings */
+  .settings-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:8px; }
+  .setting-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .setting-label { font-size:14px; font-weight:500; margin-bottom:3px; }
+  .setting-desc { font-size:12px; color:var(--muted); line-height:1.5; }
+  .setting-note { font-size:11px; color:var(--muted); margin-top:8px; font-style:italic; }
+  .toggle-wrap { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .toggle { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--border); border-radius:22px; transition:.2s; }
+  .toggle-slider:before { position:absolute; content:""; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
+  input:checked + .toggle-slider { background:var(--green); }
+  input:checked + .toggle-slider:before { transform:translateX(18px); }
+  .backup-options { margin-top:14px; padding-top:14px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .backup-options select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; color:var(--text); font-family:inherit; }
+  .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:rgba(188,140,255,.12); color:var(--purple); border:1px solid rgba(188,140,255,.3); }
+
   #checking-banner { display:none; background:rgba(88,166,255,.08); border:1px solid rgba(88,166,255,.2); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--blue); align-items:center; gap:8px; }
+  /* Settings */
+  .settings-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:8px; }
+  .setting-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  .setting-label { font-size:14px; font-weight:500; margin-bottom:3px; }
+  .setting-desc { font-size:12px; color:var(--muted); line-height:1.5; }
+  .setting-note { font-size:11px; color:var(--muted); margin-top:8px; font-style:italic; }
+  .toggle-wrap { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .toggle { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--border); border-radius:22px; transition:.2s; }
+  .toggle-slider:before { position:absolute; content:""; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
+  input:checked + .toggle-slider { background:var(--green); }
+  input:checked + .toggle-slider:before { transform:translateX(18px); }
+  .backup-options { margin-top:14px; padding-top:14px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .backup-options select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; color:var(--text); font-family:inherit; }
+  .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:rgba(188,140,255,.12); color:var(--purple); border:1px solid rgba(188,140,255,.3); }
+
   #checking-banner.visible { display:flex; }
   #notify-banner { display:none; background:rgba(63,185,80,.08); border:1px solid rgba(63,185,80,.25); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--green); align-items:center; gap:10px; flex-wrap:wrap; }
   #notify-banner.visible { display:flex; }
@@ -170,10 +204,12 @@
 <div class="tabs">
   <button class="tab active" data-tab="update"   onclick="switchTab('update')">Updates <span class="badge" id="tab-count-update">0</span></button>
   <button class="tab"        data-tab="deferred" onclick="switchTab('deferred')">Deferred <span class="badge" id="tab-count-deferred">0</span></button>
+  <button class="tab"        data-tab="backups"  onclick="switchTab('backups')">Backups <span class="badge" id="tab-count-backups">0</span></button>
   <button class="tab"        data-tab="ok"       onclick="switchTab('ok')">Up to Date <span class="badge" id="tab-count-ok">0</span></button>
   <button class="tab"        data-tab="unknown"  onclick="switchTab('unknown')">Unchecked <span class="badge" id="tab-count-unknown">0</span></button>
   <button class="tab"        data-tab="all"      onclick="switchTab('all')">All <span class="badge" id="tab-count-all">0</span></button>
   <button class="tab"        data-tab="hosts"    onclick="switchTab('hosts')">Hosts <span class="badge" id="tab-count-hosts">0</span></button>
+  <button class="tab"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
 </div>
 
 <main>
@@ -198,6 +234,9 @@
 
   <div id="container-list" class="container-list"></div>
   <div id="hosts-panel" style="display:none"></div>
+
+  <div id="backups-panel" style="display:none"></div>
+  <div id="settings-panel" style="display:none"></div>
 
   <div class="section-title" id="history-title">Recent Updates</div>
   <div id="history-list" class="history-list"></div>
@@ -266,6 +305,111 @@
   let deferTarget = null;  // {name, hostId}
   let changelogTarget = null; // {name, hostId}
 
+  // ── Settings ──────────────────────────────────────────────────────────────
+
+  let _settings = { backup_enabled: false, backup_hours: 24 };
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      _settings = await r.json();
+    } catch (e) {}
+  }
+
+  async function saveSettings() {
+    const enabled = document.getElementById('backup-enabled').checked;
+    const hours   = parseInt(document.getElementById('backup-hours').value);
+    _settings = { backup_enabled: enabled, backup_hours: hours };
+    await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(_settings) });
+    document.getElementById('backup-options').style.display = enabled ? '' : 'none';
+  }
+
+  function renderBackupsPanel() {
+    const panel = document.getElementById('backups-panel');
+    const backed = allContainers.filter(c => c.has_rollback);
+    if (!backed.length) {
+      panel.innerHTML = `<div class="empty"><span class="emoji">💾</span><strong>No backups</strong><p style="margin-top:6px">Enable backup retention in Settings, then backups will appear here after each update.</p></div>`;
+      return;
+    }
+    panel.innerHTML = backed.map(c => {
+      const exp = c.rollback_expires ? `expires ${timeUntil(c.rollback_expires)}` : '';
+      const hostChip = multiHost ? `<span class="host-chip">${esc(c.host_name)}</span>` : '';
+      return `<div class="container-card status-ok" style="border-left-color:var(--purple)">
+        <div class="card-info">
+          <div class="card-name">${esc(c.name)}</div>
+          <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
+          <div class="card-meta">${exp}${hostChip ? `<span>·</span>${hostChip}` : ''}</div>
+        </div>
+        <div class="card-actions">
+          <span class="badge-rollback">↩ backup</span>
+          <button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">Rollback</button>
+          <button class="btn-danger btn-sm" onclick="confirmDeleteBackup('${esc(c.name)}','${esc(c.host_id)}')">Delete backup</button>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderSettingsPanel() {
+    const panel = document.getElementById('settings-panel');
+    panel.innerHTML = `
+      <div class="section-title" style="margin-top:0">Update Behaviour</div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Keep backup after successful update</div>
+            <div class="setting-desc">The previous container is kept stopped after an update and can be restored if the new version causes problems.</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="backup-enabled" ${_settings.backup_enabled ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="backup-options" id="backup-options" style="display:${_settings.backup_enabled ? '' : 'none'}">
+          <label style="font-size:12px;color:var(--muted)">Keep backup for</label>
+          <select id="backup-hours" onchange="saveSettings()">
+            <option value="1"   ${_settings.backup_hours==1   ? 'selected' : ''}>1 hour</option>
+            <option value="6"   ${_settings.backup_hours==6   ? 'selected' : ''}>6 hours</option>
+            <option value="24"  ${_settings.backup_hours==24  ? 'selected' : ''}>24 hours</option>
+            <option value="168" ${_settings.backup_hours==168 ? 'selected' : ''}>7 days</option>
+          </select>
+          <span class="setting-note">Stopped containers temporarily retain their previous image layer until the backup expires.</span>
+        </div>
+      </div>`;
+  }
+
+  function confirmRollback(name, hostId = 'local') {
+    if (!confirm(`Roll back "${name}" to its previous version?\n\nThis will stop the current container and restore the backup.`)) return;
+    startRollback(name, hostId);
+  }
+
+  async function startRollback(name, hostId = 'local') {
+    const r = await fetch(`/api/rollback/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, { method:'POST' });
+    if (!r.ok) { alert('Could not start rollback — another operation may be in progress.'); return; }
+    openLogModal(name, hostId, 'Rollback log');
+  }
+
+  function confirmDeleteBackup(name, hostId = 'local') {
+    if (!confirm('Delete the backup for "' + name + '"? You will no longer be able to roll back to the previous version.')) return;
+    deleteBackup(name, hostId);
+  }
+
+  async function deleteBackup(name, hostId = 'local') {
+    try {
+      const url = '/api/backup/' + encodeURIComponent(name) + '?host=' + encodeURIComponent(hostId);
+      const r = await fetch(url, { method:'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(function(){ return {}; });
+        alert(d.error || 'Could not delete backup.');
+        return;
+      }
+    } catch (e) {
+      alert('Could not delete backup.');
+      return;
+    }
+    fetchStatus();
+  }
+
   // ── Fetch ─────────────────────────────────────────────────────────────────
 
   async function fetchStatus() {
@@ -306,6 +450,10 @@
     updateTabCounts(allContainers, allHosts);
     if (currentTab === 'hosts') {
       renderHostsPanel();
+    } else if (currentTab === 'backups') {
+      renderBackupsPanel();
+    } else if (currentTab === 'settings') {
+      // settings panel is static, no re-render needed
     } else {
       renderContainerList(allContainers, currentTab);
     }
@@ -317,6 +465,8 @@
   function updateTabCounts(containers, hosts) {
     const counts = { update:0, deferred:0, ok:0, unknown:0 };
     containers.forEach(c => { if (c.status in counts) counts[c.status]++; });
+    const backupCount = containers.filter(c => c.has_rollback).length;
+    document.getElementById('tab-count-backups').textContent  = backupCount;
     document.getElementById('tab-count-update').textContent   = counts.update;
     document.getElementById('tab-count-deferred').textContent = counts.deferred;
     document.getElementById('tab-count-ok').textContent       = counts.ok;
@@ -329,13 +479,20 @@
     currentTab = tab;
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
-    const isHosts = tab === 'hosts';
-    document.getElementById('container-list').style.display = isHosts ? 'none' : '';
-    document.getElementById('select-toolbar').style.display = isHosts ? 'none' : '';
+    const isHosts    = tab === 'hosts';
+    const isSettings = tab === 'settings';
+    const isBackups  = tab === 'backups';
+    const isContent  = !isHosts && !isSettings && !isBackups;
+    document.getElementById('container-list').style.display = isContent ? '' : 'none';
+    document.getElementById('select-toolbar').style.display = isContent ? '' : 'none';
     document.getElementById('hosts-panel').style.display    = isHosts ? '' : 'none';
-    document.getElementById('history-title').style.display  = isHosts ? 'none' : '';
-    document.getElementById('history-list').style.display   = isHosts ? 'none' : '';
+    document.getElementById('backups-panel').style.display  = isBackups ? '' : 'none';
+    document.getElementById('settings-panel').style.display = isSettings ? '' : 'none';
+    document.getElementById('history-title').style.display  = isContent ? '' : 'none';
+    document.getElementById('history-list').style.display   = isContent ? '' : 'none';
     if (isHosts) renderHostsPanel();
+    else if (isSettings) renderSettingsPanel();
+    else if (isBackups) renderBackupsPanel();
     else { renderContainerList(allContainers, tab); updateSelectionUI(); }
   }
 
@@ -392,6 +549,10 @@
       actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">View Log</button>`;
     } else {
       if (c.has_logs) actions += `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">Last Log</button>`;
+      if (c.has_rollback && !isUpdating) {
+        const exp = c.rollback_expires ? ` · expires ${timeUntil(c.rollback_expires)}` : '';
+        actions += `<span class="badge-rollback">↩ backup${exp}</span><button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">Rollback</button>`;
+      }
       if (c.status === 'update') {
         actions += `<button class="btn-primary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">Update</button>
                     <button class="btn-secondary btn-sm" onclick="openDefer('${esc(c.name)}','${esc(c.host_id)}')">Defer ▾</button>`;
@@ -537,7 +698,8 @@
       document.getElementById('add-host-url').value  = '';
       res.innerHTML = '<div class="test-result ok">✅ Host added. Running a check now…</div>';
       fetch('/api/check', {method:'POST'});
-      fetchStatus();
+      loadSettings();
+  fetchStatus();
     } else {
       res.innerHTML = `<div class="test-result error">❌ ${esc(d.error)}</div>`;
     }
@@ -546,7 +708,8 @@
   async function removeHost(hostId, hostName) {
     if (!confirm(`Remove host "${hostName}"? Its cached state will be deleted.`)) return;
     await fetch(`/api/hosts/${encodeURIComponent(hostId)}`, {method:'DELETE'});
-    fetchStatus();
+    loadSettings();
+  fetchStatus();
   }
 
   // ── Selection ─────────────────────────────────────────────────────────────
@@ -599,7 +762,8 @@
       const name = rest.join(':');
       await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
     }
-    fetchStatus();
+    loadSettings();
+  fetchStatus();
   }
 
   // ── Update / defer ────────────────────────────────────────────────────────
@@ -608,7 +772,8 @@
     document.getElementById('check-btn').disabled = true;
     document.getElementById('checking-banner').classList.add('visible');
     await fetch('/api/check', {method:'POST'});
-    fetchStatus();
+    loadSettings();
+  fetchStatus();
   }
 
   function confirmUpdate(name, hostId = 'local') {
@@ -620,7 +785,8 @@
     const selKey = `${hostId}:${name}`;
     selectedNames.delete(selKey);
     await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
-    fetchStatus();
+    loadSettings();
+  fetchStatus();
   }
 
   function openDefer(name, hostId = 'local') {
@@ -645,7 +811,8 @@
 
   async function undefer(name, hostId = 'local') {
     await fetch(`/api/undefer/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
-    fetchStatus();
+    loadSettings();
+  fetchStatus();
   }
 
   // ── Changelog ─────────────────────────────────────────────────────────────
@@ -711,9 +878,9 @@
 
   // ── Log modal ─────────────────────────────────────────────────────────────
 
-  function openLogModal(name, hostId = 'local') {
-    logTarget = {name, hostId};
-    document.getElementById('log-modal-title').textContent = `Update log — ${name}`;
+  function openLogModal(name, hostId = 'local', label = 'Update log') {
+    logTarget = {name, hostId, startedAt: Date.now()};
+    document.getElementById('log-modal-title').textContent = `${label} — ${name}`;
     document.getElementById('log-output').innerHTML = '';
     document.getElementById('log-status-text').textContent = '';
     document.getElementById('log-modal-overlay').classList.add('open');
@@ -746,9 +913,15 @@
         statusEl.textContent = 'Running…';
         logPollTimer = setTimeout(pollLogs, 800);
       } else {
+        if (data.logs.length === 0 && logTarget && (Date.now() - (logTarget.startedAt || 0) < 4000)) {
+          statusEl.textContent = 'Starting…';
+          logPollTimer = setTimeout(pollLogs, 400);
+          return;
+        }
         const last = data.logs[data.logs.length-1] || '';
         statusEl.textContent = last.startsWith('SUCCESS') ? '✅ Complete' : last.startsWith('ERROR') ? '❌ Failed' : 'Done';
-        fetchStatus();
+        loadSettings();
+  fetchStatus();
       }
     } catch (e) {
       logPollTimer = setTimeout(pollLogs, 2000);
@@ -778,10 +951,19 @@
     return `${Math.floor(diff/86400)}d ago`;
   }
 
+  function timeUntil(iso) {
+    const diff = (new Date(iso) - Date.now()) / 1000;
+    if (diff <= 0)    return 'soon';
+    if (diff < 3600)  return `in ${Math.floor(diff/60)}m`;
+    if (diff < 86400) return `in ${Math.floor(diff/3600)}h`;
+    return `in ${Math.floor(diff/86400)}d`;
+  }
+
   function esc(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  loadSettings();
   fetchStatus();
 </script>
 </body>

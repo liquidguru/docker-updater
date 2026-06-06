@@ -2,15 +2,17 @@
 
 A lightweight self-hosted web UI for managing Docker container updates — a manual-approval alternative to Watchtower.
 
-Instead of automatically pulling and restarting containers the moment a new image is published, docker-updater polls your registries on a schedule, shows you what's available, and lets you decide when (or whether) to update each container. Updates are performed with a built-in rollback safety net — the old container is kept and can be automatically restored if the new one fails to start. You can also view release changelogs from GitHub before committing to an update.
+Instead of automatically pulling and restarting containers the moment a new image is published, docker-updater polls your registries on a schedule, shows you what's available, and lets you decide when (or whether) to update each container. Updates are performed with a built-in rollback safety net — the old container is kept and can be automatically restored if the new one fails to start. For additional peace of mind, you can optionally retain a backup of the previous container after a *successful* update too — so you can roll back even when a new version comes up cleanly but later turns out to have problems. You can also view release changelogs from GitHub before committing to an update.
 
 ---
 
-![Updates tab — pending updates with bulk select](screenshot-updates.jpeg)
+![Updates tab — pending updates with bulk select and recent-update history](screenshot-updates.jpeg)
 
-![Bulk update in progress — multiple containers updating simultaneously, log viewer available per container](screenshot-updating.jpeg)
+![Backups tab — kept rollback points with one-click rollback or delete](screenshot-backups.jpeg)
 
-![Hosts tab — multi-host management](screenshot-hosts.jpeg)
+![Settings tab — backup retention toggle and window](screenshot-settings.jpeg)
+
+![Hosts tab — local and remote Docker host management](screenshot-hosts.jpeg)
 
 ## Features
 
@@ -26,9 +28,10 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **GitHub notifications** — optional webhook endpoint receives issue, PR, star, push, and release events from any of your repos and forwards them as push notifications
 - **Scheduled checks** — cron-style daily check at a configurable time and timezone; notifications only fire on the scheduled run, not on startup or manual checks
 - **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), preserving all original config: volumes, ports, environment variables, networks, static IPs, restart policy, capabilities, etc.
+- **Backup & rollback** — optionally keep the previous container after a successful update for a configurable window (Settings tab); roll back to it in one click if the new version misbehaves, or delete the backup early to reclaim space
 - **Locally-built images skipped** — containers with no `RepoDigests` (built from local Dockerfiles) are automatically ignored
 - **Persistent state** — update history, deferred decisions, and last-check timestamps survive container restarts
-- **Dark UI** — tabbed dashboard: Updates / Deferred / Up to Date / Unchecked / All / Hosts
+- **Dark UI** — tabbed dashboard: Updates / Deferred / Backups / Up to Date / Unchecked / All / Hosts / Settings
 
 ---
 
@@ -205,10 +208,28 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
    - Creates and starts the new container with identical config using the Docker SDK low-level API (Watchtower pattern)
    - Reconnects all networks via `NetworkConnect`, preserving static IP assignments, aliases, and iptables setup
    - Waits 2 seconds and checks the new container is still running
-   - **On success**: removes the `_old` container
+   - **On success**: removes the `_old` container — or, with backup retention enabled, keeps it for the configured window so you can still roll back later (see [Backup & rollback](#backup--rollback))
    - **On failure**: removes the failed new container, renames `_old` back, and restarts the previous version
 
-Container state (update availability, defer decisions, history) is persisted to `data/state.json`.
+Container state (update availability, defer decisions, history, backups) is persisted to `data/state.json`.
+
+---
+
+## Backup & rollback
+
+docker-updater keeps a safety net around every update — at two levels.
+
+### Automatic rollback on failure (always on)
+
+Before recreating a container, the old one is renamed to `{name}_old`. If the new container fails to start, docker-updater removes it, renames the old one back, and restarts it. A broken update therefore can't take a service offline — the previous version is restored automatically.
+
+### Backup retention for clean-but-broken updates (opt-in)
+
+Sometimes a new image starts up perfectly cleanly, and only later do you discover something is actually broken — a regression, a bad release, a changed default, a dropped port. The automatic rollback above can't catch this, because as far as Docker is concerned the container came up fine.
+
+For that extra peace of mind, enable **Keep backup after successful update** in the **Settings** tab. When it's on, the previous container is kept (stopped) after a *successful* update for a configurable window (default 24 hours) instead of being removed. If you hit a problem afterwards, open the **Backups** tab and click **Rollback** to instantly restore the previous version — even though the update "succeeded". Finished with a backup early? **Delete backup** removes it and reclaims the disk space.
+
+Backups are self-managing: each entry is verified against its actual `_old` container, and expired or orphaned entries are cleaned up automatically — so the Backups tab always reflects what's really there.
 
 ---
 
@@ -252,6 +273,7 @@ docker rm watchtower
 - **Private registries**: Currently supports anonymous and Bearer-token registries. Basic auth (username/password) registries are not yet supported.
 - **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required environment variables. If an update fails with an application-level error after recreation, check the image's release notes for new required env vars.
 - **host network mode**: Containers using `--network host` are recreated correctly; the network reconnect step is skipped for these.
+- **Backup retention & disk space**: with backup retention enabled, each backup keeps a stopped container and its previous image layers until the backup expires (or you delete it from the Backups tab). On hosts with limited disk, keep the retention window short or delete backups once you're confident in an update.
 
 ---
 
