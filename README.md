@@ -30,6 +30,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), preserving all original config: volumes, ports, environment variables, networks, static IPs, restart policy, capabilities, etc.
 - **Backup & rollback** — optionally keep the previous container after a successful update for a configurable window (Settings tab); roll back to it in one click if the new version misbehaves, or delete the backup early to reclaim space
 - **Crash-safe** — if docker-updater is restarted mid-update/rollback, it reconciles leftover backups on startup and restores any service left down
+- **Multi-arch image** — published for `linux/amd64` and `linux/arm64`, so it runs on x86 servers and ARM boards (Raspberry Pi, etc.)
 - **Locally-built images skipped** — containers with no `RepoDigests` (built from local Dockerfiles) are automatically ignored
 - **Persistent state** — update history, deferred decisions, and last-check timestamps survive container restarts
 - **Dark UI** — tabbed dashboard: Updates / Deferred / Backups / Up to Date / Unchecked / All / Hosts / Settings
@@ -40,6 +41,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 - Docker with access to `/var/run/docker.sock`
 - Works on Synology DSM, Unraid, Proxmox, or any Linux host running Docker
+- Multi-arch image (`linux/amd64` + `linux/arm64`) — runs on x86 hosts and ARM boards like the Raspberry Pi
 
 ---
 
