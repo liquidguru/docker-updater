@@ -13,6 +13,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import threading
 import time
 
@@ -111,7 +112,62 @@ def get_docker_client(url: str | None = None):
     """Return a DockerClient for a local socket, SSH, or TCP URL."""
     if not url or url.startswith("unix://") or url.startswith("npipe://"):
         return docker.from_env()
+    if url.startswith("ssh://"):
+        # use_ssh_client=True delegates to the system SSH binary instead of
+        # paramiko, so it respects ~/.ssh/config (including our persistent
+        # UserKnownHostsFile in the data volume).
+        return docker.DockerClient(base_url=url, use_ssh_client=True)
     return docker.DockerClient(base_url=url)
+
+
+def _setup_ssh_config() -> None:
+    """Write ~/.ssh/config at startup so the system SSH binary uses
+    /app/data/known_hosts as its UserKnownHostsFile. This persists accepted
+    host keys across container restarts via the data volume."""
+    ssh_dir = os.path.expanduser("~/.ssh")
+    os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+    known_hosts = os.path.join(DATA_DIR, "known_hosts")
+    config_path = os.path.join(ssh_dir, "config")
+    with open(config_path, "w") as f:
+        f.write(
+            f"Host *\n"
+            f"    UserKnownHostsFile {known_hosts}\n"
+            f"    StrictHostKeyChecking yes\n"
+        )
+    if not os.path.exists(known_hosts):
+        open(known_hosts, "w").close()
+        os.chmod(known_hosts, 0o600)
+    print(f"[ssh] Persistent known_hosts: {known_hosts}")
+
+
+def _ssh_keyscan_and_accept(url: str) -> bool:
+    """Run ssh-keyscan for the host in a ssh:// URL and append its key to
+    the persistent known_hosts file. Returns True on success.
+    This implements Trust On First Use (TOFU) — host keys are verified on
+    every subsequent connection via StrictHostKeyChecking=yes."""
+    m = re.match(r"ssh://(?:[^@]+@)?([^:/]+)(?::(\d+))?", url)
+    if not m:
+        return False
+    host, port = m.group(1), m.group(2) or "22"
+    known_hosts = os.path.join(DATA_DIR, "known_hosts")
+    try:
+        result = subprocess.run(
+            ["ssh-keyscan", "-H", "-p", port, host],
+            capture_output=True, text=True, timeout=10,
+        )
+        lines = [
+            ln for ln in result.stdout.splitlines()
+            if ln.strip() and not ln.startswith("#")
+        ]
+        if not lines:
+            return False
+        with open(known_hosts, "a") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"[ssh] Accepted host key for {host}:{port}")
+        return True
+    except Exception as exc:
+        print(f"[ssh] ssh-keyscan failed for {host}:{port}: {exc}")
+        return False
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -1161,13 +1217,31 @@ def api_hosts_test(host_id):
     host  = next((h for h in hosts if h["id"] == host_id), None)
     if not host:
         return jsonify({"error": "Host not found"}), 404
+    url = host.get("url", "")
     try:
-        client = get_docker_client(host.get("url"))
+        client = get_docker_client(url)
         info   = client.info()
         return jsonify({"ok": True, "version": info.get("ServerVersion", "?"),
                         "containers": info.get("Containers", "?")})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 200
+        err_str = str(e)
+        # Auto-accept SSH host key on first connection (Trust On First Use).
+        # If the connection fails because the host isn't in known_hosts, run
+        # ssh-keyscan to fetch and save the key, then retry once.
+        if url.startswith("ssh://") and "known_hosts" in err_str:
+            try:
+                if _ssh_keyscan_and_accept(url):
+                    client = get_docker_client(url)
+                    info   = client.info()
+                    return jsonify({
+                        "ok": True,
+                        "version":      info.get("ServerVersion", "?"),
+                        "containers":   info.get("Containers", "?"),
+                        "accepted_key": True,
+                    })
+            except Exception as e2:
+                err_str = str(e2)
+        return jsonify({"ok": False, "error": err_str}), 200
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -1295,6 +1369,8 @@ if __name__ == "__main__":
     if remote_hosts:
         print(f"[hosts] {len(remote_hosts)} remote host(s) configured: "
               f"{', '.join(h['name'] for h in remote_hosts)}")
+
+    _setup_ssh_config()
 
     print("[recover] Checking for interrupted operations...")
     recover_interrupted_operations()

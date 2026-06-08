@@ -669,7 +669,8 @@
     const r = await fetch(`/api/hosts/${encodeURIComponent(hostId)}/test`, {method:'POST'});
     const d = await r.json();
     btn.textContent = 'Test'; btn.disabled = false;
-    alert(d.ok ? `✅ Connected — Docker ${d.version}, ${d.containers} containers` : `❌ ${d.error}`);
+    const keyNote = d.accepted_key ? '\n🔑 Host key automatically accepted and saved.' : '';
+    alert(d.ok ? `✅ Connected — Docker ${d.version}, ${d.containers} containers${keyNote}` : `❌ ${d.error}`);
   }
 
   async function testNewHost() {
@@ -687,7 +688,8 @@
     const testD = await testR.json();
     await fetch(`/api/hosts/${encodeURIComponent(addD.id)}`, {method:'DELETE'});
     if (testD.ok) {
-      res.innerHTML = `<div class="test-result ok">✅ Connected — Docker ${testD.version}, ${testD.containers} containers</div>`;
+      const keyNote = testD.accepted_key ? '<br><small>🔑 Host key automatically accepted and saved.</small>' : '';
+      res.innerHTML = `<div class="test-result ok">✅ Connected — Docker ${testD.version}, ${testD.containers} containers${keyNote}</div>`;
     } else {
       res.innerHTML = `<div class="test-result error">❌ ${esc(testD.error)}</div>`;
     }

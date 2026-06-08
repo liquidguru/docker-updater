@@ -124,9 +124,23 @@ docker-updater can manage containers on multiple Docker hosts from a single dash
 1. Open the **Hosts** tab
 2. Enter a name and the Docker URL
 3. Click **Test Connection** to verify before saving
+   - For SSH hosts, the first test automatically fetches and saves the remote host key (Trust On First Use). You'll see a 🔑 note confirming this. All subsequent connections verify the saved key — no manual `ssh-keyscan` step needed.
 4. Click **Add Host** — a check runs immediately
 
 All containers from all hosts then appear together in the Updates/Deferred/Up to Date/etc. tabs, each with a small host chip. The Hosts tab shows connection health and last-check time for each host.
+
+### SSH host keys
+
+Accepted host keys are stored in `data/known_hosts` inside your data volume, so they survive container restarts and upgrades automatically.
+
+If you prefer to manage SSH keys yourself (e.g. to pin specific keys or share a known_hosts from your host machine), you can mount your existing `~/.ssh` directory into the container:
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  - ./data:/app/data
+  - ~/.ssh:/root/.ssh:ro   # optional — mounts host SSH config/keys
+```
 
 ---
 
