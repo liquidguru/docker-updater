@@ -1167,6 +1167,36 @@ def api_changelog(name):
         return jsonify({"error": str(e), "releases": []}), 500
 
 
+# ── Container logs route ──────────────────────────────────────────────────────
+
+@app.route("/api/container/<name>/logs")
+def api_container_logs(name):
+    """Return the last N lines of a container's docker logs plus its status."""
+    host_id = request.args.get("host_id", "local")
+    tail    = min(int(request.args.get("tail", 200)), 2000)
+    try:
+        if host_id == "local":
+            client = docker.from_env()
+        else:
+            hosts = load_hosts()
+            host  = next((h for h in hosts if h["id"] == host_id), None)
+            if not host:
+                return jsonify({"error": f"Host '{host_id}' not found"}), 404
+            client = get_docker_client(host.get("url"))
+        container  = client.containers.get(name)
+        logs       = container.logs(tail=tail, timestamps=True).decode("utf-8", errors="replace")
+        state      = container.attrs.get("State", {})
+        return jsonify({
+            "logs":      logs,
+            "status":    container.status,
+            "exit_code": state.get("ExitCode"),
+        })
+    except docker.errors.NotFound:
+        return jsonify({"error": f"Container '{name}' not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Host management routes ────────────────────────────────────────────────────
 
 @app.route("/api/hosts", methods=["GET"])

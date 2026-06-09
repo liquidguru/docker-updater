@@ -285,6 +285,23 @@
   </div>
 </div>
 
+<!-- Container logs modal -->
+<div class="modal-overlay" id="ctr-log-overlay" onclick="closeCtrLogs(event)">
+  <div class="modal" style="width:min(800px,95vw)">
+    <div class="modal-header">
+      <h3 id="ctr-log-title">Container Logs</h3>
+      <span id="ctr-log-pill" style="font-size:12px;padding:2px 8px;border-radius:12px;border:1px solid currentColor;margin-left:12px;flex-shrink:0"></span>
+      <button class="btn-ghost" onclick="closeCtrLogs()" style="margin-left:auto">✕</button>
+    </div>
+    <div class="modal-body"><div class="log-output" id="ctr-log-output" style="max-height:520px;overflow-y:auto"></div></div>
+    <div class="modal-footer">
+      <span id="ctr-log-meta" style="color:var(--muted);font-size:12px;margin-right:auto"></span>
+      <button class="btn-secondary btn-sm" onclick="refreshCtrLogs()">↻ Refresh</button>
+      <button class="btn-secondary btn-sm" onclick="closeCtrLogs()">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Changelog modal -->
 <div class="modal-overlay" id="changelog-modal-overlay" onclick="closeChangelogModal(event)">
   <div class="modal" style="width:min(760px,95vw)">
@@ -354,6 +371,7 @@
           <span class="badge-rollback">↩ backup</span>
           <button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">Rollback</button>
           <button class="btn-danger btn-sm" onclick="confirmDeleteBackup('${esc(c.name)}','${esc(c.host_id)}')">Delete backup</button>
+          <button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">Logs</button>
         </div>
       </div>`;
     }).join('');
@@ -571,6 +589,8 @@
       }
     }
 
+    const logsBtn = `<button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">Logs</button>`;
+
     return `<div class="container-card ${statusClass} ${showCb ? 'has-cb' : ''} ${isSelected ? 'selected' : ''}" id="card-${esc(selKey)}">
       ${cbHtml}
       <div class="card-info">
@@ -578,7 +598,7 @@
         <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
         <div class="card-meta">${checkedAt}${hostChip ? `<span>·</span>${hostChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
       </div>
-      <div class="card-actions">${badge}${actions}</div>
+      <div class="card-actions">${badge}${actions}${logsBtn}</div>
     </div>`;
   }
 
@@ -903,6 +923,62 @@
     const {name, hostId} = changelogTarget;
     closeChangelogModal();
     confirmUpdate(name, hostId);
+  }
+
+  // ── Container logs modal ──────────────────────────────────────────────────
+
+  let _ctrLogTarget = null;
+
+  async function openCtrLogs(name, hostId = 'local') {
+    _ctrLogTarget = {name, hostId};
+    document.getElementById('ctr-log-title').textContent = `Logs — ${name}`;
+    document.getElementById('ctr-log-pill').textContent  = '';
+    document.getElementById('ctr-log-output').textContent = 'Loading…';
+    document.getElementById('ctr-log-meta').textContent   = '';
+    document.getElementById('ctr-log-overlay').classList.add('open');
+    await _fetchCtrLogs();
+  }
+
+  async function refreshCtrLogs() {
+    if (!_ctrLogTarget) return;
+    document.getElementById('ctr-log-output').textContent = 'Loading…';
+    await _fetchCtrLogs();
+  }
+
+  async function _fetchCtrLogs() {
+    const {name, hostId} = _ctrLogTarget;
+    try {
+      const r = await fetch(`/api/container/${encodeURIComponent(name)}/logs?host_id=${encodeURIComponent(hostId)}&tail=200`);
+      const d = await r.json();
+      if (d.error) {
+        document.getElementById('ctr-log-output').textContent = `Error: ${d.error}`;
+        return;
+      }
+      // Status pill
+      const pill = document.getElementById('ctr-log-pill');
+      if (d.status === 'running') {
+        pill.textContent = '● running';
+        pill.style.color = 'var(--green)';
+      } else {
+        const code = (d.exit_code !== null && d.exit_code !== undefined) ? ` (exit ${d.exit_code})` : '';
+        pill.textContent   = `● stopped${code}`;
+        pill.style.color   = d.exit_code === 0 ? 'var(--muted)' : 'var(--red)';
+      }
+      // Output — scroll to bottom so the newest lines are visible
+      const out = document.getElementById('ctr-log-output');
+      out.textContent = d.logs || '(no output)';
+      out.scrollTop   = out.scrollHeight;
+      document.getElementById('ctr-log-meta').textContent =
+        `Last 200 lines · refreshed ${new Date().toLocaleTimeString()}`;
+    } catch (err) {
+      document.getElementById('ctr-log-output').textContent = `Error: ${err.message}`;
+    }
+  }
+
+  function closeCtrLogs(e) {
+    if (e && e.target !== document.getElementById('ctr-log-overlay')) return;
+    document.getElementById('ctr-log-overlay').classList.remove('open');
+    _ctrLogTarget = null;
   }
 
   // ── Log modal ─────────────────────────────────────────────────────────────
