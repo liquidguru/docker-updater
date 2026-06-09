@@ -312,6 +312,7 @@
   let refreshTimer = null;
   let deferTarget = null;  // {name, hostId}
   let changelogTarget = null; // {name, hostId}
+  let _lastHostsJSON = '';   // used by renderHostsPanel to skip no-op redraws
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
@@ -620,6 +621,18 @@
   // ── Hosts panel ───────────────────────────────────────────────────────────
 
   function renderHostsPanel() {
+    // Skip re-render when nothing changed — avoids wiping form inputs on every poll.
+    const hostsJSON = JSON.stringify(allHosts);
+    if (hostsJSON === _lastHostsJSON) return;
+    _lastHostsJSON = hostsJSON;
+
+    // Preserve any in-progress form values and focus before rebuilding the DOM.
+    const savedName   = document.getElementById('add-host-name')?.value ?? '';
+    const savedUrl    = document.getElementById('add-host-url')?.value ?? '';
+    const savedResult = document.getElementById('add-host-result')?.innerHTML ?? '';
+    const focusedId   = document.activeElement?.closest('#hosts-panel')
+                          ? document.activeElement.id : '';
+
     const panel = document.getElementById('hosts-panel');
     const hostsHTML = allHosts.map(h => {
       const isLocal  = h.id === 'local';
@@ -662,6 +675,12 @@
           <button class="btn-primary btn-sm" onclick="addHost()">Add Host</button>
         </div>
       </div>`;
+
+    // Restore form state after DOM rebuild.
+    if (savedName)   document.getElementById('add-host-name').value = savedName;
+    if (savedUrl)    document.getElementById('add-host-url').value  = savedUrl;
+    if (savedResult) document.getElementById('add-host-result').innerHTML = savedResult;
+    if (focusedId)   document.getElementById(focusedId)?.focus();
   }
 
   async function testHost(hostId, btn) {
