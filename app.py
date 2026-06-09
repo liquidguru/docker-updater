@@ -29,6 +29,7 @@ DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
 HOSTS_STATE_DIR      = os.path.join(DATA_DIR, "hosts")
+LOG_DIR              = os.path.join(DATA_DIR, "logs")
 CHECK_TIME            = os.environ.get("CHECK_TIME", "03:00")
 TIMEZONE              = os.environ.get("TIMEZONE", "Australia/Melbourne")
 NOTIFY_URL            = os.environ.get("NOTIFY_URL", "").strip()
@@ -173,6 +174,25 @@ def _ssh_keyscan_and_accept(url: str) -> bool:
     except Exception as exc:
         print(f"[ssh] ssh-keyscan failed for {host}:{port}: {exc}")
         return False
+
+
+def _log_path(name: str, host_id: str = "local") -> str:
+    """Return the filesystem path for a container's persisted update log."""
+    prefix = f"{host_id}__{name}" if host_id != "local" else name
+    safe   = re.sub(r"[^a-zA-Z0-9._-]", "_", prefix)
+    return os.path.join(LOG_DIR, f"{safe}.log")
+
+
+def _persist_log(key: str, name: str, host_id: str) -> None:
+    """Write the in-memory update log for *key* to disk (best-effort)."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with _logs_lock:
+            lines = list(_update_logs.get(key, []))
+        with open(_log_path(name, host_id), "w") as fh:
+            fh.write("\n".join(lines))
+    except Exception:
+        pass
 
 
 # ── Notifications ─────────────────────────────────────────────────────────────
@@ -651,6 +671,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
             hs["history"] = hs["history"][:50]
             save_host_state(host_id, hs)
     finally:
+        _persist_log(key, container_name, host_id)
         with _logs_lock:
             _update_running.discard(key)
 
@@ -719,6 +740,7 @@ def apply_rollback(container_name: str, host_id: str = "local") -> None:
     except Exception as e:
         emit(f"\nERROR: {e}")
     finally:
+        _persist_log(key, container_name, host_id)
         with _logs_lock:
             _update_running.discard(key)
 
@@ -1172,7 +1194,24 @@ def api_changelog(name):
         return jsonify({"error": str(e), "releases": []}), 500
 
 
-# ── Container logs route ──────────────────────────────────────────────────────
+# ── Container & update log routes ────────────────────────────────────────────
+
+@app.route("/api/update-log/<name>")
+def api_update_log(name):
+    """Return the persisted update/rollback log for a container (survives restarts)."""
+    host_id = request.args.get("host_id", "local")
+    path    = _log_path(name, host_id)
+    if not os.path.exists(path):
+        return jsonify({"found": False, "logs": []}), 200
+    try:
+        with open(path) as fh:
+            lines = fh.read().splitlines()
+        return jsonify({"found": True, "logs": lines})
+    except Exception as e:
+        return jsonify({"found": False, "error": str(e)}), 500
+
+
+
 
 @app.route("/api/container/<name>/logs")
 def api_container_logs(name):

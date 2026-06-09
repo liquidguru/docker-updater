@@ -628,12 +628,17 @@
       const runDot = isRunning
         ? '<span style="color:var(--green);font-size:10px;white-space:nowrap;width:56px;display:inline-block;text-align:right">● running</span>'
         : '<span style="color:var(--red);font-size:10px;white-space:nowrap;width:56px;display:inline-block;text-align:right">● stopped</span>';
+      const statusOk  = ok || (isRunning && isUpToDate);
+      const icon      = statusOk ? '✅' : (isRunning ? '⚠️' : '❌');
+      const iconTitle = (!ok && h.status) ? ` title="${esc(h.status)}"` : '';
+      const iconCls   = statusOk ? 'history-status-success' : (isRunning ? '' : 'history-status-error');
       return `<div class="history-item">
-        <span class="${ok || (isRunning && isUpToDate) ? 'history-status-success' : (isRunning ? '' : 'history-status-error')}">${ok || (isRunning && isUpToDate) ? '✅' : (isRunning ? '⚠️' : '❌')}</span>
+        <span class="${iconCls}"${iconTitle}>${icon}</span>
         <span class="history-name">${esc(h.container)}${hostLabel}</span>
         <span class="history-image">${esc(h.image === '?' && runningContainer ? runningContainer.image : h.image)}</span>
         ${runDot}
         <span class="history-time">${timeAgo(h.updated_at)}</span>
+        <button class="btn-ghost btn-sm" style="flex-shrink:0;margin-left:4px" onclick="openHistoryLog('${esc(h.container)}','${esc(h.host_id || 'local')}')">Log</button>
       </div>`;
     }).join('');
   }
@@ -923,6 +928,38 @@
     const {name, hostId} = changelogTarget;
     closeChangelogModal();
     confirmUpdate(name, hostId);
+  }
+
+  // ── Persisted update-log viewer (history rows) ────────────────────────────
+
+  async function openHistoryLog(name, hostId = 'local') {
+    logTarget = null;         // disable SSE poll — this is a static fetch
+    clearTimeout(logPollTimer);
+    document.getElementById('log-modal-title').textContent = `Update log — ${name}`;
+    document.getElementById('log-output').innerHTML = '<span style="color:var(--muted)">Loading…</span>';
+    document.getElementById('log-status-text').textContent = '';
+    document.getElementById('log-modal-overlay').classList.add('open');
+    try {
+      const r = await fetch(`/api/update-log/${encodeURIComponent(name)}?host_id=${encodeURIComponent(hostId)}`);
+      const d = await r.json();
+      const out = document.getElementById('log-output');
+      if (!d.found || !d.logs.length) {
+        out.innerHTML = '<span style="color:var(--muted)">No log on disk yet — logs are saved after the next update.</span>';
+        return;
+      }
+      out.innerHTML = d.logs.map(line => {
+        if (line.startsWith('SUCCESS')) return `<span class="log-success">${esc(line)}</span>`;
+        if (line.startsWith('ERROR'))   return `<span class="log-error">${esc(line)}</span>`;
+        if (line.startsWith('▶'))       return `<span class="log-section">${esc(line)}</span>`;
+        return esc(line);
+      }).join('\n');
+      out.scrollTop = out.scrollHeight;
+      const last = d.logs[d.logs.length - 1] || '';
+      document.getElementById('log-status-text').textContent =
+        last.startsWith('SUCCESS') ? '✅ Complete' : last.startsWith('ERROR') ? '❌ Failed' : '';
+    } catch (err) {
+      document.getElementById('log-output').textContent = `Error: ${err.message}`;
+    }
   }
 
   // ── Container logs modal ──────────────────────────────────────────────────
