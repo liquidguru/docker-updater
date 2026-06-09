@@ -108,16 +108,21 @@ def save_host_state(host_id: str, state: dict) -> None:
         json.dump(state, f, indent=2, default=str)
 
 
-def get_docker_client(url: str | None = None):
-    """Return a DockerClient for a local socket, SSH, or TCP URL."""
+def get_docker_client(url: str | None = None, timeout: int = 300):
+    """Return a DockerClient for a local socket, SSH, or TCP URL.
+
+    timeout defaults to 300 s (5 min) — large LSIO images can take that long
+    to pull, and some first-boot init scripts run apt-get before the server
+    starts.  Pass a shorter value for quick status-check calls if needed.
+    """
     if not url or url.startswith("unix://") or url.startswith("npipe://"):
-        return docker.from_env()
+        return docker.from_env(timeout=timeout)
     if url.startswith("ssh://"):
         # use_ssh_client=True delegates to the system SSH binary instead of
         # paramiko, so it respects ~/.ssh/config (including our persistent
         # UserKnownHostsFile in the data volume).
-        return docker.DockerClient(base_url=url, use_ssh_client=True)
-    return docker.DockerClient(base_url=url)
+        return docker.DockerClient(base_url=url, use_ssh_client=True, timeout=timeout)
+    return docker.DockerClient(base_url=url, timeout=timeout)
 
 
 def _setup_ssh_config() -> None:
@@ -431,9 +436,9 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         log.append(line)
 
     try:
-        # Resolve Docker client
+        # Resolve Docker client (generous timeout — pulls can be slow)
         if host_id == "local":
-            client = docker.from_env()
+            client = get_docker_client()
         else:
             hosts = load_hosts()
             host = next((h for h in hosts if h["id"] == host_id), None)
@@ -665,7 +670,7 @@ def apply_rollback(container_name: str, host_id: str = "local") -> None:
 
     try:
         if host_id == "local":
-            client = docker.from_env()
+            client = get_docker_client()
         else:
             hosts = load_hosts()
             host = next((h for h in hosts if h["id"] == host_id), None)
