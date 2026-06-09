@@ -18,12 +18,14 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 - **Registry polling** — compares local image digests against the registry without pulling, using the Docker Registry v2 manifest API (`HEAD` + `Docker-Content-Digest`)
 - **Multi-registry support** — Docker Hub, GHCR (`ghcr.io`), LinuxServer (`lscr.io`), and any registry that implements the Bearer token challenge
-- **Multi-host support** — manage containers across multiple Docker hosts (SSH or TCP) from a single dashboard; each host has a connection health indicator and containers are shown together with a host chip
+- **Multi-host support** — manage containers across multiple Docker hosts (SSH or TCP) from a single dashboard; SSH host keys are auto-accepted on first Test Connection (TOFU) and persisted across restarts; each host has a connection health indicator and containers are shown together with a host chip
 - **Per-container control** — update individually, defer for 7/14/30/90 days or indefinitely, or un-defer at any time
 - **Bulk updates** — select multiple containers and update them all at once
 - **Changelog viewer** — fetches the last 5 GitHub Releases for any image that publishes an `org.opencontainers.image.source` label
 - **Live update log** — streaming log modal shows pull progress and recreation status in real time; auto-reconnects if you refresh the page mid-update
-- **Smart history icons** — recent updates show ✅ (succeeded or running & up-to-date), ⚠️ (errored but container still running), or ❌ (errored and stopped), with a `● running / ● stopped` dot for every row
+- **Persistent update logs** — the full log from every update and rollback is saved to disk so you can review it any time via the **Log** button on each history row, even after a container restart
+- **Container log viewer** — a **Logs** button on every container card opens the last 200 lines of `docker logs` in a modal, with a running/stopped status pill and a Refresh button; useful for diagnosing why a freshly-updated container isn't behaving
+- **Smart history icons** — recent updates show ✅ (succeeded or running & up-to-date), ⚠️ (errored but container still running), or ❌ (errored and stopped), with a `● running / ● stopped` dot for every row; hover the icon to see the error message without opening the log
 - **Push notifications** — auto-generates a private ntfy topic on first run; or bring your own Apprise URL (ntfy, Pushover, Discord, Slack, etc.)
 - **GitHub notifications** — optional webhook endpoint receives issue, PR, star, push, and release events from any of your repos and forwards them as push notifications
 - **Scheduled checks** — cron-style daily check at a configurable time and timezone; notifications only fire on the scheduled run, not on startup or manual checks
