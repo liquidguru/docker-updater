@@ -326,6 +326,8 @@ def _scan_host(client, host_id: str) -> dict:
     available = {}
     for container in client.containers.list():
         name = container.name
+        if name.endswith("_old"):
+            continue  # skip backup containers created by docker-updater
         image_name = container.attrs["Config"]["Image"]
         if is_locally_built(container):
             continue
@@ -899,6 +901,8 @@ def api_status():
         client = docker.from_env()
         for container in client.containers.list():
             name       = container.name
+            if name.endswith("_old"):
+                continue  # skip backup containers created by docker-updater
             image_name = container.attrs["Config"]["Image"]
             if is_locally_built(container):
                 continue
