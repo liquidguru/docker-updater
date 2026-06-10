@@ -507,6 +507,12 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         emit("▶ Renaming old container (kept for rollback)...")
         container.rename(old_name)
         old_container = client.containers.get(old_name)
+        # Disable auto-start on the backup so a host reboot doesn't start both
+        # the current container and its _old backup simultaneously.
+        try:
+            client.api.update_container(old_container.id, restart_policy={"Name": "no"})
+        except Exception:
+            pass
 
         # Read backup setting before recreation so we know what to do on success
         with _state_lock:
@@ -613,8 +619,15 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                         failed.remove()
                     except Exception:
                         pass
-                # Rename _old back to original name and restart
+                # Rename _old back to original name, restore restart policy, restart
                 old_container.rename(container_name)
+                try:
+                    client.api.update_container(
+                        old_container.id,
+                        restart_policy=hcfg.get("RestartPolicy", {"Name": "unless-stopped"}),
+                    )
+                except Exception:
+                    pass
                 old_container.start()
                 emit("  Rollback successful — previous container restored.")
             except Exception as rb_err:
@@ -631,6 +644,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         rollback_entry = {
             "backed_up_at": datetime.datetime.utcnow().isoformat() + "Z",
             "expires_at": _expires,
+            "restart_policy": hcfg.get("RestartPolicy", {"Name": "unless-stopped"}),
         } if _backup_enabled else None
         if host_id == "local":
             with _state_lock:
@@ -717,6 +731,18 @@ def apply_rollback(container_name: str, host_id: str = "local") -> None:
         emit("▶ Restoring previous container...")
         old_container = client.containers.get(old_name)
         old_container.rename(container_name)
+        # Restore the original restart policy (was set to "no" when backup was made).
+        try:
+            if host_id == "local":
+                _rb_state = load_state()
+            else:
+                _rb_state = load_host_state(host_id)
+            _orig_policy = (_rb_state.get("rollbacks", {})
+                            .get(container_name, {})
+                            .get("restart_policy", {"Name": "unless-stopped"}))
+            client.api.update_container(old_container.id, restart_policy=_orig_policy)
+        except Exception:
+            pass
         old_container.start()
         emit(f"\nSUCCESS: {container_name} rolled back to previous version.")
 
@@ -1405,7 +1431,13 @@ def recover_interrupted_operations() -> None:
                     print(f"[recover] Could not remove '{base}': {e}; skipping")
                     continue
             old.rename(base)
-            client.containers.get(base).start()
+            _restored = client.containers.get(base)
+            try:
+                _orig = rollbacks.get(base, {}).get("restart_policy", {"Name": "unless-stopped"})
+                client.api.update_container(_restored.id, restart_policy=_orig)
+            except Exception:
+                pass
+            _restored.start()
             rollbacks.pop(base, None)
             history.insert(0, {
                 "container": base, "image": "↩ recovered",
