@@ -1076,21 +1076,35 @@ def _github_repo_from_labels(labels: dict) -> str | None:
     return None
 
 
+def _github_repo_from_url(url: str) -> str | None:
+    """Parse a GitHub URL (repo page, releases page, etc.) into owner/repo."""
+    m = re.match(r"https?://github\.com/([^/]+/[^/\s]+?)(?:\.git|/releases|/tags|/)?$", url.strip())
+    return m.group(1) if m else None
+
+
 def fetch_changelog(container_name: str, host_id: str = "local") -> dict:
     if host_id == "local":
         client = docker.from_env()
+        _cl_state = load_state()
     else:
         hosts = load_hosts()
         host = next((h for h in hosts if h["id"] == host_id), None)
         if not host:
             return {"error": f"Host '{host_id}' not found.", "releases": []}
         client = get_docker_client(host.get("url"))
+        _cl_state = load_host_state(host_id)
 
     container = client.containers.get(container_name)
     labels    = (container.image.attrs.get("Config") or {}).get("Labels") or {}
-    image_name = container.attrs["Config"]["Image"]
     repo       = _github_repo_from_labels(labels)
     source_url = labels.get("org.opencontainers.image.source", "")
+
+    # Fall back to manual override if no OCI label
+    if not repo:
+        override = _cl_state.get("changelog_urls", {}).get(container_name, "")
+        if override:
+            repo = _github_repo_from_url(override)
+            source_url = override
 
     if not repo:
         return {"repo": None, "source_url": source_url or None, "releases": [],
@@ -1246,13 +1260,15 @@ def api_status():
                     has_rollback = False
                 except Exception:
                     pass
+            _cl_override = state.get("changelog_urls", {}).get(name)
             containers.append({
                 "name": name, "image": image_name, "status": status,
                 "defer_until": defer.get("until") if is_deferred else None,
                 "checked_at": info.get("checked_at"),
                 "updating": is_updating,
                 "has_logs": has_logs,
-                "has_changelog": _has_changelog(container),
+                "has_changelog": _has_changelog(container) or bool(_cl_override),
+                "changelog_url": _cl_override,
                 "has_rollback": has_rollback,
                 "rollback_expires": rb.get("expires_at") if has_rollback else None,
                 "host_id": "local", "host_name": "Local",
@@ -1301,6 +1317,7 @@ def api_status():
             with _logs_lock:
                 is_updating = key in _update_running
                 has_logs    = key in _update_logs
+            _h_cl_override = hs.get("changelog_urls", {}).get(cname)
             containers.append({
                 "name": cname, "image": cinfo.get("image", ""),
                 "status": cstatus,
@@ -1308,7 +1325,8 @@ def api_status():
                 "checked_at": cinfo.get("checked_at"),
                 "updating": is_updating,
                 "has_logs": has_logs,
-                "has_changelog": False,
+                "has_changelog": bool(_h_cl_override),
+                "changelog_url": _h_cl_override,
                 "host_id": host_id, "host_name": host_name,
             })
 
@@ -1561,6 +1579,32 @@ def api_container_logs(name):
         return jsonify({"error": f"Container '{name}' not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/container/<name>/changelog-url", methods=["POST"])
+def api_set_changelog_url(name):
+    """Save or clear a manual changelog URL override for a container."""
+    data    = request.get_json(silent=True) or {}
+    url     = (data.get("url") or "").strip()
+    host_id = data.get("host_id", "local")
+    if url and not re.match(r"https?://github\.com/[^/]+/[^/\s]+", url):
+        return jsonify({"error": "URL must be a GitHub repository URL"}), 400
+    if host_id == "local":
+        with _state_lock:
+            state = load_state()
+            if url:
+                state.setdefault("changelog_urls", {})[name] = url
+            else:
+                state.setdefault("changelog_urls", {}).pop(name, None)
+            save_state(state)
+    else:
+        hs = load_host_state(host_id)
+        if url:
+            hs.setdefault("changelog_urls", {})[name] = url
+        else:
+            hs.setdefault("changelog_urls", {}).pop(name, None)
+        save_host_state(host_id, hs)
+    return jsonify({"ok": True})
 
 
 # ── Host management routes ────────────────────────────────────────────────────

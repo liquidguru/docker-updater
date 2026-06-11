@@ -303,6 +303,27 @@
 </div>
 
 <!-- Changelog modal -->
+<div class="modal-overlay" id="changelog-src-overlay" onclick="closeChangelogSrc(event)">
+  <div class="modal" style="width:min(480px,95vw)">
+    <div class="modal-header">
+      <h3 id="changelog-src-title">Set changelog source</h3>
+      <button class="btn-ghost" onclick="closeChangelogSrc()">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px 20px 8px">
+      <p style="color:var(--muted);font-size:13px;margin:0 0 14px">Paste the GitHub repository URL — docker-updater will fetch releases from it whenever you click <em>What's new?</em></p>
+      <input id="changelog-src-input" type="url" placeholder="https://github.com/owner/repo"
+        style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg,var(--bg));color:var(--fg);font-size:14px"
+        onkeydown="if(event.key==='Enter')saveChangelogSource()">
+      <p id="changelog-src-err" style="color:var(--red);font-size:12px;margin:8px 0 0;display:none"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary btn-sm" id="changelog-src-clear-btn" onclick="clearChangelogSource()" style="margin-right:auto">Clear</button>
+      <button class="btn-secondary btn-sm" onclick="closeChangelogSrc()">Cancel</button>
+      <button class="btn-primary btn-sm" onclick="saveChangelogSource()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="changelog-modal-overlay" onclick="closeChangelogModal(event)">
   <div class="modal" style="width:min(760px,95vw)">
     <div class="modal-header">
@@ -567,9 +588,17 @@
       ? `<div class="card-cb-wrap"><input type="checkbox" class="card-cb" data-key="${esc(selKey)}" ${isSelected ? 'checked' : ''} onchange="toggleSelect('${esc(selKey)}', this.checked)"></div>`
       : '';
 
-    const whatsNew = (c.status === 'update' || c.status === 'deferred') && !isUpdating && c.has_changelog
-      ? `<button class="btn-link" onclick="openChangelog('${esc(c.name)}','${esc(c.host_id)}')">What's new?</button>`
-      : '';
+    let whatsNew = '';
+    if ((c.status === 'update' || c.status === 'deferred') && !isUpdating) {
+      if (c.has_changelog) {
+        whatsNew = `<button class="btn-link" onclick="openChangelog('${esc(c.name)}','${esc(c.host_id)}')">What's new?</button>`;
+        if (c.changelog_url) {
+          whatsNew += ` <button class="btn-link" style="opacity:0.5;font-size:11px;padding:0 2px" title="Edit changelog source" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','${esc(c.changelog_url)}')">✎</button>`;
+        }
+      } else {
+        whatsNew = `<button class="btn-link" style="opacity:0.55;font-size:12px" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','')">Set changelog source…</button>`;
+      }
+    }
 
     let actions = '';
     if (isUpdating) {
@@ -921,6 +950,51 @@
     if (e && e.target !== document.getElementById('changelog-modal-overlay')) return;
     document.getElementById('changelog-modal-overlay').classList.remove('open');
     changelogTarget = null;
+  }
+
+  // ── Changelog source override ───────────────────────────────────────────────
+  let _changelogSrcTarget = null;
+
+  function openSetChangelogSource(name, hostId, currentUrl) {
+    _changelogSrcTarget = {name, hostId};
+    document.getElementById('changelog-src-title').textContent = `Set changelog source — ${name}`;
+    document.getElementById('changelog-src-input').value = currentUrl || '';
+    document.getElementById('changelog-src-err').style.display = 'none';
+    document.getElementById('changelog-src-clear-btn').style.display = currentUrl ? '' : 'none';
+    document.getElementById('changelog-src-overlay').classList.add('open');
+    setTimeout(() => document.getElementById('changelog-src-input').focus(), 50);
+  }
+
+  function closeChangelogSrc(e) {
+    if (e && e.target !== document.getElementById('changelog-src-overlay')) return;
+    document.getElementById('changelog-src-overlay').classList.remove('open');
+    _changelogSrcTarget = null;
+  }
+
+  async function saveChangelogSource() {
+    if (!_changelogSrcTarget) return;
+    const url = document.getElementById('changelog-src-input').value.trim();
+    const errEl = document.getElementById('changelog-src-err');
+    errEl.style.display = 'none';
+    const {name, hostId} = _changelogSrcTarget;
+    try {
+      const r = await fetch(`/api/container/${encodeURIComponent(name)}/changelog-url`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url, host_id: hostId}),
+      });
+      const data = await r.json();
+      if (!r.ok) { errEl.textContent = data.error || 'Save failed'; errEl.style.display = ''; return; }
+      closeChangelogSrc();
+      await refreshStatus();
+    } catch (e) {
+      errEl.textContent = String(e); errEl.style.display = '';
+    }
+  }
+
+  async function clearChangelogSource() {
+    document.getElementById('changelog-src-input').value = '';
+    await saveChangelogSource();
   }
 
   function changelogUpdate() {
