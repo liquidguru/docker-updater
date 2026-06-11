@@ -4,6 +4,7 @@ docker-updater — poll registries for image digest changes, apply updates with 
 Supports multiple Docker hosts via SSH or TCP.
 """
 
+import base64
 import datetime
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="paramiko")
@@ -13,7 +14,9 @@ import json
 import os
 import re
 import secrets
+import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -41,6 +44,7 @@ _logs_lock     = threading.Lock()   # guards _update_logs and _update_running
 _check_running = False
 _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
+_OWN_CONTAINER_ID: str | None = None  # set at startup via _detect_own_container()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -174,6 +178,121 @@ def _ssh_keyscan_and_accept(url: str) -> bool:
     except Exception as exc:
         print(f"[ssh] ssh-keyscan failed for {host}:{port}: {exc}")
         return False
+
+
+def _detect_own_container() -> None:
+    """Record our own container short ID so apply_update can detect self-updates."""
+    global _OWN_CONTAINER_ID
+    try:
+        _OWN_CONTAINER_ID = socket.gethostname()
+        print(f"[self-update] Own container hostname: {_OWN_CONTAINER_ID}")
+    except Exception:
+        pass
+
+
+def _run_self_update_helper() -> None:
+    """Called when DOCKER_UPDATER_SELF_UPDATE_SPEC_B64 is set in the environment.
+
+    This runs inside a temporary helper container spawned by apply_update.
+    It waits for the old docker-updater container to stop, then recreates it
+    using the new image and the saved config spec.
+    """
+    spec_b64 = os.environ.get("DOCKER_UPDATER_SELF_UPDATE_SPEC_B64", "")
+    if not spec_b64:
+        print("[self-update-helper] ERROR: spec env var not set")
+        return
+
+    try:
+        spec = json.loads(base64.b64decode(spec_b64))
+    except Exception as e:
+        print(f"[self-update-helper] Failed to decode spec: {e}")
+        return
+
+    name       = spec["name"]
+    image_name = spec["image"]
+    cfg        = spec["cfg"]
+    hcfg       = spec["hcfg"]
+    full_nets  = spec["full_nets"]
+
+    print(f"[self-update-helper] Waiting 10s for {name} to stop...")
+    time.sleep(10)
+
+    client = get_docker_client()
+
+    # Stop and remove the old container (the main process has already returned
+    # control after spawning us, so the Flask app in it is still running briefly)
+    for attempt in range(3):
+        try:
+            old = client.containers.get(name)
+            print(f"[self-update-helper] Stopping {name} (attempt {attempt + 1})...")
+            old.stop(timeout=30)
+            old.remove()
+            print(f"[self-update-helper] Removed old {name}")
+            break
+        except docker.errors.NotFound:
+            print(f"[self-update-helper] {name} already gone")
+            break
+        except Exception as e:
+            print(f"[self-update-helper] Stop failed: {e}")
+            if attempt < 2:
+                time.sleep(5)
+
+    # Recreate with new image using preserved config
+    print(f"[self-update-helper] Recreating {name} with {image_name}...")
+    try:
+        network_mode = hcfg.get("NetworkMode", "bridge")
+        hc = client.api.create_host_config(
+            binds=hcfg.get("Binds") or [],
+            port_bindings=hcfg.get("PortBindings") or {},
+            network_mode=network_mode,
+            restart_policy=hcfg.get("RestartPolicy"),
+            cap_add=hcfg.get("CapAdd"), cap_drop=hcfg.get("CapDrop"),
+            privileged=hcfg.get("Privileged", False),
+            security_opt=hcfg.get("SecurityOpt"), devices=hcfg.get("Devices"),
+            extra_hosts=hcfg.get("ExtraHosts"), dns=hcfg.get("Dns"),
+            dns_search=hcfg.get("DnsSearch"), volumes_from=hcfg.get("VolumesFrom"),
+            pid_mode=hcfg.get("PidMode") or "", ipc_mode=hcfg.get("IpcMode") or "",
+            tmpfs=hcfg.get("Tmpfs"),
+        )
+
+        simple_net_name = next(iter(full_nets), None)
+        simple_nc = None
+        if simple_net_name:
+            simple_nc = client.api.create_networking_config({
+                simple_net_name: client.api.create_endpoint_config(
+                    aliases=full_nets[simple_net_name].get("aliases") or None,
+                    ipv4_address=full_nets[simple_net_name].get("ipv4_address"),
+                    ipv6_address=full_nets[simple_net_name].get("ipv6_address"),
+                )
+            })
+
+        new_c = client.api.create_container(
+            image=image_name, name=name,
+            hostname=cfg.get("Hostname", ""), user=cfg.get("User", ""),
+            detach=True, environment=cfg.get("Env"), command=cfg.get("Cmd"),
+            entrypoint=cfg.get("Entrypoint"), labels=cfg.get("Labels"),
+            volumes=list((cfg.get("Volumes") or {}).keys()) or None,
+            working_dir=cfg.get("WorkingDir", ""),
+            ports=_exposed_ports(cfg) or None,
+            host_config=hc, networking_config=simple_nc,
+        )
+
+        if network_mode != "host" and len(full_nets) > 1:
+            for net_name, net_info in full_nets.items():
+                if net_name == simple_net_name:
+                    continue
+                client.api.connect_container_to_network(
+                    new_c["Id"], net_name,
+                    aliases=net_info.get("aliases") or None,
+                    ipv4_address=net_info.get("ipv4_address"),
+                    ipv6_address=net_info.get("ipv6_address"),
+                )
+
+        client.api.start(new_c["Id"])
+        print(f"[self-update-helper] {name} started successfully.")
+    except Exception as e:
+        print(f"[self-update-helper] Recreation failed: {e}")
+        print(f"[self-update-helper] Manually recreate the container to recover.")
 
 
 def _log_path(name: str, host_id: str = "local") -> str:
@@ -491,6 +610,44 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                 emit(f"  {status} {detail}".rstrip())
             if "error" in chunk:
                 emit(f"  ERROR: {chunk['error']}")
+
+        # ── Self-update detection ─────────────────────────────────────────────
+        # If we're updating our own container, we can't do the stop/rename/
+        # recreate ourselves — that would kill the process mid-flight. Instead
+        # spawn a helper container using the just-pulled new image; it waits
+        # for us to exit, then stops the old container and starts the new one.
+        if host_id == "local" and _OWN_CONTAINER_ID and old_id.startswith(_OWN_CONTAINER_ID):
+            emit("\n♻ Self-update detected — docker-updater is updating itself.")
+            emit("  Preparing handoff to helper container...")
+            _su_short = old_id[:12]
+            _su_nets = {
+                n: {
+                    "aliases": [a for a in (d.get("Aliases") or []) if a != _su_short],
+                    "ipv4_address": (d.get("IPAMConfig") or {}).get("IPv4Address") or None,
+                    "ipv6_address": (d.get("IPAMConfig") or {}).get("IPv6Address") or None,
+                }
+                for n, d in nets.items()
+            }
+            _su_spec = json.dumps({"name": container_name, "image": image_name,
+                                   "cfg": cfg, "hcfg": hcfg, "full_nets": _su_nets})
+            _su_spec_b64 = base64.b64encode(_su_spec.encode()).decode()
+            try:
+                client.containers.run(
+                    image_name,
+                    environment={"DOCKER_UPDATER_SELF_UPDATE_SPEC_B64": _su_spec_b64},
+                    volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+                    detach=True,
+                    remove=True,
+                )
+                emit("  Helper spawned — docker-updater will restart in ~10 seconds.")
+                emit("\nSUCCESS: Self-update handed off. The page will be unreachable")
+                emit("  briefly while the new container starts. Refresh after 30s.")
+            except Exception as su_err:
+                emit(f"\nERROR spawning self-update helper: {su_err}")
+                emit("  Pull succeeded — to finish the update, manually recreate this")
+                emit(f"  container using image: {image_name}")
+            return
+        # ─────────────────────────────────────────────────────────────────────
 
         emit("\n▶ Stopping old container...")
         container.stop(timeout=30)
@@ -1456,6 +1613,13 @@ def recover_interrupted_operations() -> None:
 
 
 if __name__ == "__main__":
+    # Self-update helper mode — runs inside a temporary helper container that
+    # was spawned by apply_update when docker-updater updated itself.
+    # Must be checked before any other startup code.
+    if os.environ.get("DOCKER_UPDATER_SELF_UPDATE_SPEC_B64"):
+        _run_self_update_helper()
+        sys.exit(0)
+
     check_hour, check_minute = map(int, CHECK_TIME.split(":"))
 
     _scheduler = BackgroundScheduler(daemon=True, timezone=TIMEZONE)
@@ -1481,6 +1645,7 @@ if __name__ == "__main__":
               f"{', '.join(h['name'] for h in remote_hosts)}")
 
     _setup_ssh_config()
+    _detect_own_container()
 
     print("[recover] Checking for interrupted operations...")
     recover_interrupted_operations()
