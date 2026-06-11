@@ -190,12 +190,34 @@ def _detect_own_container() -> None:
         pass
 
 
+def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
+    """Write history + rollback entry to state.json from the self-update helper.
+    Only meaningful when /app/data is mounted in the helper container."""
+    if not os.path.exists(DATA_DIR):
+        print("[self-update-helper] /app/data not mounted — skipping state.json update")
+        return
+    try:
+        state = load_state()
+        state["available"].pop(name, None)
+        state.setdefault("history", []).insert(0, history_entry)
+        state["history"] = state["history"][:50]
+        if rollback_entry:
+            state.setdefault("rollbacks", {})[name] = rollback_entry
+        else:
+            state.setdefault("rollbacks", {}).pop(name, None)
+        save_state(state)
+        print("[self-update-helper] state.json updated.")
+    except Exception as e:
+        print(f"[self-update-helper] Failed to update state.json: {e}")
+
+
 def _run_self_update_helper() -> None:
     """Called when DOCKER_UPDATER_SELF_UPDATE_SPEC_B64 is set in the environment.
 
-    This runs inside a temporary helper container spawned by apply_update.
-    It waits for the old docker-updater container to stop, then recreates it
-    using the new image and the saved config spec.
+    Runs inside a temporary helper container spawned by apply_update. Waits for
+    the old container to finish, renames it to {name}_old (rollback point),
+    recreates it from the new image, verifies it started, and auto-rolls back
+    if the new container exits immediately.
     """
     spec_b64 = os.environ.get("DOCKER_UPDATER_SELF_UPDATE_SPEC_B64", "")
     if not spec_b64:
@@ -208,44 +230,65 @@ def _run_self_update_helper() -> None:
         print(f"[self-update-helper] Failed to decode spec: {e}")
         return
 
-    name       = spec["name"]
-    image_name = spec["image"]
-    cfg        = spec["cfg"]
-    hcfg       = spec["hcfg"]
-    full_nets  = spec["full_nets"]
+    name           = spec["name"]
+    image_name     = spec["image"]
+    cfg            = spec["cfg"]
+    hcfg           = spec["hcfg"]
+    full_nets      = spec["full_nets"]
+    backup_enabled = spec.get("backup_enabled", False)
+    backup_hours   = int(spec.get("backup_hours", 24))
+    orig_policy    = hcfg.get("RestartPolicy", {"Name": "unless-stopped"})
+    old_name       = f"{name}_old"
 
-    print(f"[self-update-helper] Waiting 10s for {name} to stop...")
+    print(f"[self-update-helper] Waiting 10s for {name} to exit...")
     time.sleep(10)
 
     client = get_docker_client()
 
-    # Stop and remove the old container (the main process has already returned
-    # control after spawning us, so the Flask app in it is still running briefly)
+    # ── Stop the old container ────────────────────────────────────────────────
+    old_container = None
     for attempt in range(3):
         try:
-            old = client.containers.get(name)
+            old_container = client.containers.get(name)
             print(f"[self-update-helper] Stopping {name} (attempt {attempt + 1})...")
-            old.stop(timeout=30)
-            old.remove()
-            print(f"[self-update-helper] Removed old {name}")
+            old_container.stop(timeout=30)
+            print(f"[self-update-helper] Stopped.")
             break
         except docker.errors.NotFound:
-            print(f"[self-update-helper] {name} already gone")
+            print(f"[self-update-helper] {name} already gone.")
             break
         except Exception as e:
             print(f"[self-update-helper] Stop failed: {e}")
             if attempt < 2:
                 time.sleep(5)
 
-    # Recreate with new image using preserved config
+    # ── Rename old → _old (rollback point, restart=no) ───────────────────────
+    try:
+        stale = client.containers.get(old_name)
+        stale.remove(force=True)
+        print(f"[self-update-helper] Removed stale {old_name}.")
+    except docker.errors.NotFound:
+        pass
+
+    if old_container is not None:
+        try:
+            old_container.rename(old_name)
+            client.api.update_container(old_container.id, restart_policy={"Name": "no"})
+            print(f"[self-update-helper] Renamed to {old_name} with restart=no.")
+        except Exception as e:
+            print(f"[self-update-helper] Rename failed: {e} — rollback unavailable.")
+            old_container = None
+
+    # ── Recreate with new image ───────────────────────────────────────────────
     print(f"[self-update-helper] Recreating {name} with {image_name}...")
+    new_c = None
     try:
         network_mode = hcfg.get("NetworkMode", "bridge")
         hc = client.api.create_host_config(
             binds=hcfg.get("Binds") or [],
             port_bindings=hcfg.get("PortBindings") or {},
             network_mode=network_mode,
-            restart_policy=hcfg.get("RestartPolicy"),
+            restart_policy=orig_policy,
             cap_add=hcfg.get("CapAdd"), cap_drop=hcfg.get("CapDrop"),
             privileged=hcfg.get("Privileged", False),
             security_opt=hcfg.get("SecurityOpt"), devices=hcfg.get("Devices"),
@@ -289,10 +332,72 @@ def _run_self_update_helper() -> None:
                 )
 
         client.api.start(new_c["Id"])
-        print(f"[self-update-helper] {name} started successfully.")
-    except Exception as e:
-        print(f"[self-update-helper] Recreation failed: {e}")
-        print(f"[self-update-helper] Manually recreate the container to recover.")
+        time.sleep(2)
+        started = client.containers.get(name)
+        if started.status not in ("running", "restarting"):
+            raise RuntimeError(
+                f"New container exited immediately (status={started.status})"
+            )
+
+        # ── Success ───────────────────────────────────────────────────────────
+        print(f"[self-update-helper] {name} is running.")
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        if backup_enabled:
+            expires_iso = (
+                datetime.datetime.utcnow() + datetime.timedelta(hours=backup_hours)
+            ).isoformat() + "Z"
+            rollback_entry: dict | None = {
+                "backed_up_at": now_iso, "expires_at": expires_iso,
+                "restart_policy": orig_policy,
+            }
+            print(f"[self-update-helper] Backup kept for {backup_hours}h.")
+        else:
+            rollback_entry = None
+            if old_container is not None:
+                try:
+                    old_container.remove()
+                    print(f"[self-update-helper] Removed {old_name}.")
+                except Exception as e:
+                    print(f"[self-update-helper] Could not remove {old_name}: {e}")
+
+        history_entry = {
+            "container": name, "image": image_name,
+            "updated_at": now_iso, "status": "success", "host_id": "local",
+        }
+        _helper_write_state(name, history_entry, rollback_entry)
+
+    except Exception as recreate_err:
+        # ── Failure: roll back to _old ────────────────────────────────────────
+        print(f"[self-update-helper] Recreation failed: {recreate_err}")
+        print(f"[self-update-helper] Rolling back to previous container...")
+        try:
+            if new_c is not None:
+                try:
+                    failed = client.containers.get(name)
+                    failed.stop(timeout=10)
+                    failed.remove()
+                except Exception:
+                    pass
+            if old_container is not None:
+                old_container.rename(name)
+                try:
+                    client.api.update_container(old_container.id, restart_policy=orig_policy)
+                except Exception:
+                    pass
+                old_container.start()
+                print(f"[self-update-helper] Rollback successful — previous container restored.")
+            else:
+                print(f"[self-update-helper] No old container — manual intervention required.")
+        except Exception as rb_err:
+            print(f"[self-update-helper] Rollback also failed: {rb_err}")
+
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        history_entry = {
+            "container": name, "image": image_name,
+            "updated_at": now_iso,
+            "status": f"error: {recreate_err}", "host_id": "local",
+        }
+        _helper_write_state(name, history_entry, None)
 
 
 def _log_path(name: str, host_id: str = "local") -> str:
@@ -615,7 +720,8 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         # If we're updating our own container, we can't do the stop/rename/
         # recreate ourselves — that would kill the process mid-flight. Instead
         # spawn a helper container using the just-pulled new image; it waits
-        # for us to exit, then stops the old container and starts the new one.
+        # for us to exit, then renames us to _old (rollback point), recreates
+        # us with the new image, and rolls back automatically if it fails.
         if host_id == "local" and _OWN_CONTAINER_ID and old_id.startswith(_OWN_CONTAINER_ID):
             emit("\n♻ Self-update detected — docker-updater is updating itself.")
             emit("  Preparing handoff to helper container...")
@@ -628,14 +734,43 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                 }
                 for n, d in nets.items()
             }
-            _su_spec = json.dumps({"name": container_name, "image": image_name,
-                                   "cfg": cfg, "hcfg": hcfg, "full_nets": _su_nets})
+            # Read backup settings and include in spec so the helper knows
+            # whether to keep or remove the _old container after a successful update.
+            with _state_lock:
+                _su_bst = load_state()
+            _su_backup_enabled = _su_bst.get("backup_enabled", False)
+            _su_backup_hours   = int(_su_bst.get("backup_hours", 24))
+
+            # Find the host-side path for /app/data so the helper can mount it
+            # and write the rollback entry + history to state.json.
+            _su_data_host = None
+            for _bind in (hcfg.get("Binds") or []):
+                _parts = _bind.split(":")
+                if len(_parts) >= 2 and _parts[1] == "/app/data":
+                    _su_data_host = _parts[0]
+                    break
+
+            _su_spec = json.dumps({
+                "name": container_name, "image": image_name,
+                "cfg": cfg, "hcfg": hcfg, "full_nets": _su_nets,
+                "backup_enabled": _su_backup_enabled,
+                "backup_hours": _su_backup_hours,
+            })
             _su_spec_b64 = base64.b64encode(_su_spec.encode()).decode()
+            _su_volumes = {
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+            }
+            if _su_data_host:
+                _su_volumes[_su_data_host] = {"bind": "/app/data", "mode": "rw"}
+                emit("  Data volume found — rollback + history will be recorded.")
+            else:
+                emit("  Data volume path not detected — rollback won't appear in UI")
+                emit("  (startup recovery self-heals if the new container fails).")
             try:
                 client.containers.run(
                     image_name,
                     environment={"DOCKER_UPDATER_SELF_UPDATE_SPEC_B64": _su_spec_b64},
-                    volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+                    volumes=_su_volumes,
                     detach=True,
                     remove=True,
                 )
