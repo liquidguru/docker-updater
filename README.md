@@ -21,7 +21,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **Multi-host support** — manage containers across multiple Docker hosts (SSH or TCP) from a single dashboard; SSH host keys are auto-accepted on first Test Connection (TOFU) and persisted across restarts; each host has a connection health indicator and containers are shown together with a host chip
 - **Per-container control** — update individually, defer for 7/14/30/90 days or indefinitely, or un-defer at any time
 - **Bulk updates** — select multiple containers and update them all at once
-- **Changelog viewer** — fetches the last 5 GitHub Releases for any image that publishes an `org.opencontainers.image.source` label
+- **Changelog viewer** — fetches the last 5 GitHub Releases and renders them inline; works automatically for images with an `org.opencontainers.image.source` label or hosted on GHCR (`ghcr.io`); for anything else a *Set changelog source…* prompt lets you pin a GitHub repo URL, pre-filled with a best guess from the image name
 - **Live update log** — streaming log modal shows pull progress and recreation status in real time; auto-reconnects if you refresh the page mid-update
 - **Persistent update logs** — the full log from every update and rollback is saved to disk so you can review it any time via the **Log** button on each history row, even after a container restart
 - **Container log viewer** — a **Logs** button on every container card opens the last 200 lines of `docker logs` in a modal, with a running/stopped status pill and a Refresh button; useful for diagnosing why a freshly-updated container isn't behaving
@@ -270,9 +270,11 @@ So an interrupted operation self-heals on the next start instead of leaving a se
 
 ## Changelog viewer
 
-For containers whose image was built with an `org.opencontainers.image.source` label pointing to a GitHub repository, a **What's new?** link appears in the update card. Clicking it fetches the last 5 releases from the GitHub Releases API and renders them inline with basic markdown formatting.
+A **What's new?** button appears on update and deferred cards and fetches the last 5 releases from the GitHub Releases API, rendered inline with basic markdown formatting. It works in three tiers:
 
-This works out of the box for most images maintained by projects that publish GitHub Releases (Home Assistant, Homarr, Vaultwarden, Calibre-Web, and many LinuxServer images).
+1. **OCI source label** — images built with an `org.opencontainers.image.source` label pointing to a GitHub repo work automatically. This covers most well-maintained images: Home Assistant, Homarr, Vaultwarden, Calibre-Web, all LinuxServer images, etc.
+2. **GHCR images** — any image hosted on `ghcr.io` (e.g. `ghcr.io/owner/repo:tag`) is auto-detected with no configuration, since GHCR names map directly to GitHub repos.
+3. **Manual override** — for everything else, a *Set changelog source…* link appears instead. Clicking it opens a dialog pre-filled with a best-guess GitHub URL derived from the image name (`owner/image` → `github.com/owner/image`; official images like `redis` → `github.com/redis/redis`). Confirm or correct it and save — the *What's new?* button replaces the prompt immediately and the URL persists in `data/state.json`.
 
 ---
 
