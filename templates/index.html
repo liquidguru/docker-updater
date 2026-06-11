@@ -311,6 +311,7 @@
     </div>
     <div class="modal-body" style="padding:20px 20px 8px">
       <p style="color:var(--muted);font-size:13px;margin:0 0 14px">Paste the GitHub repository URL — docker-updater will fetch releases from it whenever you click <em>What's new?</em></p>
+      <p id="changelog-src-hint" style="color:var(--muted);font-size:12px;margin:0 0 10px;display:none">⚑ Guessed from image name — verify before saving.</p>
       <input id="changelog-src-input" type="url" placeholder="https://github.com/owner/repo"
         style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg,var(--bg));color:var(--fg);font-size:14px"
         onkeydown="if(event.key==='Enter')saveChangelogSource()">
@@ -596,7 +597,7 @@
           whatsNew += ` <button class="btn-link" style="opacity:0.5;font-size:11px;padding:0 2px" title="Edit changelog source" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','${esc(c.changelog_url)}')">✎</button>`;
         }
       } else {
-        whatsNew = `<button class="btn-link" style="opacity:0.55;font-size:12px" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','')">Set changelog source…</button>`;
+        whatsNew = `<button class="btn-link" style="opacity:0.55;font-size:12px" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','','${esc(c.image)}')">Set changelog source…</button>`;
       }
     }
 
@@ -955,10 +956,22 @@
   // ── Changelog source override ───────────────────────────────────────────────
   let _changelogSrcTarget = null;
 
-  function openSetChangelogSource(name, hostId, currentUrl) {
+  function _guessGithubUrl(image) {
+    const name = image.split(':')[0].split('@')[0];
+    const parts = name.split('/');
+    if (parts[0] === 'ghcr.io') return ''; // handled server-side
+    if (parts.length === 1) return `https://github.com/${parts[0]}/${parts[0]}`; // official: redis → redis/redis
+    if (parts.length === 2) return `https://github.com/${parts[0]}/${parts[1]}`; // owner/image
+    return '';
+  }
+
+  function openSetChangelogSource(name, hostId, currentUrl, imageName) {
     _changelogSrcTarget = {name, hostId};
+    const prefill = currentUrl || (imageName ? _guessGithubUrl(imageName) : '');
     document.getElementById('changelog-src-title').textContent = `Set changelog source — ${name}`;
-    document.getElementById('changelog-src-input').value = currentUrl || '';
+    document.getElementById('changelog-src-input').value = prefill;
+    const hint = document.getElementById('changelog-src-hint');
+    if (hint) hint.style.display = (!currentUrl && prefill) ? '' : 'none';
     document.getElementById('changelog-src-err').style.display = 'none';
     document.getElementById('changelog-src-clear-btn').style.display = currentUrl ? '' : 'none';
     document.getElementById('changelog-src-overlay').classList.add('open');

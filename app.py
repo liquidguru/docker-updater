@@ -531,7 +531,10 @@ def get_local_digest(container) -> str | None:
 def _has_changelog(container) -> bool:
     try:
         labels = (container.image.attrs.get("Config") or {}).get("Labels") or {}
-        return _github_repo_from_labels(labels) is not None
+        if _github_repo_from_labels(labels) is not None:
+            return True
+        image = container.attrs["Config"]["Image"]
+        return _github_repo_from_image(image) is not None
     except Exception:
         return False
 
@@ -1082,6 +1085,16 @@ def _github_repo_from_url(url: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _github_repo_from_image(image: str) -> str | None:
+    """Parse a GHCR image name into a GitHub owner/repo string.
+    Only applied to ghcr.io images — those map 1:1 to a GitHub repo."""
+    name = re.split(r"[:@]", image)[0]
+    parts = name.split("/")
+    if len(parts) >= 3 and parts[0] == "ghcr.io":
+        return f"{parts[1]}/{parts[2]}"
+    return None
+
+
 def fetch_changelog(container_name: str, host_id: str = "local") -> dict:
     if host_id == "local":
         client = docker.from_env()
@@ -1105,6 +1118,13 @@ def fetch_changelog(container_name: str, host_id: str = "local") -> dict:
         if override:
             repo = _github_repo_from_url(override)
             source_url = override
+
+    # Auto-detect GHCR images: ghcr.io/owner/repo always maps to github.com/owner/repo
+    if not repo:
+        image_name = container.attrs["Config"]["Image"]
+        repo = _github_repo_from_image(image_name)
+        if repo:
+            source_url = f"https://github.com/{repo}"
 
     if not repo:
         return {"repo": None, "source_url": source_url or None, "releases": [],
