@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.10.0] — 2026-06-17
+
+### Added
+- **Compose stack chip** — container cards now show a small **⬡ stackname** chip when the container was started by Docker Compose, read from the `com.docker.compose.project` label. No configuration needed; standalone containers show nothing extra (closes #9)
+
 ## [1.9.0] — 2026-06-12
 
 ### Added
