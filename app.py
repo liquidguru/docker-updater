@@ -564,12 +564,14 @@ def _scan_host(client, host_id: str) -> dict:
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
         if remote_digest:
+            labels = container.labels or {}
             available[name] = {
                 "image": image_name,
                 "local_digest": local_digest,
                 "remote_digest": remote_digest,
                 "has_update": has_update,
                 "checked_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "compose_project": labels.get("com.docker.compose.project"),
             }
     return available
 
@@ -1281,6 +1283,7 @@ def api_status():
                 except Exception:
                     pass
             _cl_override = state.get("changelog_urls", {}).get(name)
+            _compose = (container.labels or {}).get("com.docker.compose.project")
             containers.append({
                 "name": name, "image": image_name, "status": status,
                 "defer_until": defer.get("until") if is_deferred else None,
@@ -1291,6 +1294,7 @@ def api_status():
                 "changelog_url": _cl_override,
                 "has_rollback": has_rollback,
                 "rollback_expires": rb.get("expires_at") if has_rollback else None,
+                "compose_project": _compose,
                 "host_id": "local", "host_name": "Local",
             })
     except Exception as e:
@@ -1347,6 +1351,7 @@ def api_status():
                 "has_logs": has_logs,
                 "has_changelog": bool(_h_cl_override),
                 "changelog_url": _h_cl_override,
+                "compose_project": cinfo.get("compose_project"),
                 "host_id": host_id, "host_name": host_name,
             })
 

@@ -75,6 +75,7 @@
   .host-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--muted); white-space:nowrap; }
   .host-chip.online  { border-color:rgba(63,185,80,.3); color:var(--green); }
   .host-chip.offline { border-color:rgba(248,81,73,.3); color:var(--red); }
+  .compose-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid rgba(130,100,240,.3); border-radius:10px; padding:1px 7px; font-size:10px; color:#a78bfa; white-space:nowrap; }
 
   .badge-status { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.4px; }
   .badge-update   { background:rgba(210,153,34,.15); color:var(--orange); border:1px solid rgba(210,153,34,.3); }
@@ -583,6 +584,9 @@
     const hostChip = multiHost
       ? `<span class="host-chip">${esc(c.host_name)}</span>`
       : '';
+    const composeChip = c.compose_project
+      ? `<span class="compose-chip" title="Docker Compose stack">⬡ ${esc(c.compose_project)}</span>`
+      : '';
 
     const showCb = c.status === 'update' && !isUpdating;
     const cbHtml = showCb
@@ -626,7 +630,7 @@
       <div class="card-info">
         <div class="card-name">${esc(c.name)}</div>
         <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
-        <div class="card-meta">${checkedAt}${hostChip ? `<span>·</span>${hostChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
+        <div class="card-meta">${checkedAt}${hostChip ? `<span>·</span>${hostChip}` : ''}${composeChip ? `<span>·</span>${composeChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
       </div>
       <div class="card-actions">${badge}${actions}${logsBtn}</div>
     </div>`;
