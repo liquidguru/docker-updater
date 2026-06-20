@@ -28,6 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
+APP_VERSION          = "1.10.1"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -498,7 +499,7 @@ def _token_from_challenge(www_auth: str) -> str | None:
         return None
 
 
-def get_remote_digest(image_name: str) -> str | None:
+def get_remote_digest(image_name: str, local_digest: str | None = None) -> str | None:
     try:
         registry, repo, tag = parse_image(image_name)
         url = f"https://{registry}/v2/{repo}/manifests/{tag}"
@@ -512,7 +513,18 @@ def get_remote_digest(image_name: str) -> str | None:
         if r.status_code == 405:
             r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
         if r.status_code == 200:
-            return r.headers.get("Docker-Content-Digest")
+            remote = r.headers.get("Docker-Content-Digest")
+            ct = r.headers.get("Content-Type", "")
+            if (remote and local_digest and remote != local_digest
+                    and ("manifest.list" in ct or "image.index" in ct)):
+                try:
+                    body = requests.get(url, headers=headers, timeout=10, allow_redirects=True).json()
+                    platform_digests = {m.get("digest") for m in body.get("manifests", [])}
+                    if local_digest in platform_digests:
+                        return local_digest
+                except Exception:
+                    pass
+            return remote
     except Exception as e:
         print(f"[checker] registry error for {image_name}: {e}")
     return None
@@ -559,7 +571,7 @@ def _scan_host(client, host_id: str) -> dict:
         if is_locally_built(container):
             continue
         local_digest = get_local_digest(container)
-        remote_digest = get_remote_digest(image_name)
+        remote_digest = get_remote_digest(image_name, local_digest)
         has_update = bool(local_digest and remote_digest and local_digest != remote_digest)
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
@@ -1228,7 +1240,7 @@ def webhook_github():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", version=APP_VERSION)
 
 
 @app.route("/api/status")

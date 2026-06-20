@@ -18,6 +18,8 @@
   header { background:var(--surface); border-bottom:1px solid var(--border); padding:14px 24px; position:sticky; top:0; z-index:100; }
   .header-row { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
   .header-row h1 { font-size:16px; font-weight:600; white-space:nowrap; }
+  .app-version { font-size:11px; font-weight:500; color:var(--muted); text-decoration:none; vertical-align:middle; }
+  .app-version:hover { color:var(--text); }
   .header-stats { display:flex; gap:12px; flex:1; flex-wrap:wrap; }
   .stat-chip { display:flex; align-items:center; gap:5px; background:var(--surface2); border:1px solid var(--border); border-radius:20px; padding:2px 10px; font-size:12px; }
   .stat-chip .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
@@ -201,7 +203,7 @@
 
 <header>
   <div class="header-row">
-    <h1>🐳 Docker Updater</h1>
+    <h1>🐳 Docker Updater <a class="app-version" href="https://github.com/liquidguru/docker-updater/blob/main/CHANGELOG.md" target="_blank" rel="noopener" title="View changelog">v{{ version }}</a></h1>
     <div class="header-stats" id="header-stats"></div>
     <div class="header-right">
       <span class="last-check" id="last-check-label">—</span>

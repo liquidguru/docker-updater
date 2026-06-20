@@ -2,7 +2,13 @@
 
 All notable changes to docker-updater are documented here.
 
-## [1.10.0] — 2026-06-17
+## [1.10.1] — 2026-06-21
+
+### Added
+- **Version display** — the running version now appears next to the title in the header, linked to the changelog
+
+### Fixed
+- **Persistent false "Update Available"** — multi-arch images could be flagged as having an update forever, even immediately after pulling. The registry returns the *manifest list* digest while Docker sometimes stores the *platform-specific* digest locally; these never match by design. docker-updater now fetches the manifest list when the digests differ and treats the image as up to date if the local digest is one of the list's platform entries (closes #10)
 
 ### Added
 - **Compose stack chip** — container cards now show a small **⬡ stackname** chip when the container was started by Docker Compose, read from the `com.docker.compose.project` label. No configuration needed; standalone containers show nothing extra (closes #9)
