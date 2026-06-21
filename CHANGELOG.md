@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.10.2] — 2026-06-21
+
+### Fixed
+- **Persistent false "Update Available" after v1.10.1** — multi-arch tags can publish a new index digest even when the current platform image is unchanged. docker-updater now compares the remote platform manifest's config digest with the local Docker image ID before flagging an update, so index-only churn no longer keeps images like `postgres:16-alpine` or `nextcloud:stable-apache` stuck as updateable.
+
 ## [1.10.1] — 2026-06-21
 
 ### Added

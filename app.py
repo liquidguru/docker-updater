@@ -28,7 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.10.1"
+APP_VERSION          = "1.10.2"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -484,6 +484,42 @@ def parse_image(image_name: str) -> tuple[str, str, str]:
     return registry, repo, tag
 
 
+def _digest_from_ref(ref: str | None) -> str | None:
+    if not ref:
+        return None
+    return ref.split("@", 1)[-1]
+
+
+def _docker_repo_candidates(registry: str, repo: str) -> set[str]:
+    candidates = {repo, f"{registry}/{repo}"}
+    if registry == "registry-1.docker.io":
+        candidates.add(f"docker.io/{repo}")
+        if repo.startswith("library/"):
+            short = repo.split("/", 1)[1]
+            candidates.update({
+                short,
+                f"docker.io/{short}",
+                f"registry-1.docker.io/{short}",
+            })
+    return candidates
+
+
+def _manifest_matches_platform(manifest: dict, platform: dict | None) -> bool:
+    if not platform:
+        return False
+    candidate = manifest.get("platform") or {}
+    if candidate.get("os") == "unknown" or candidate.get("architecture") == "unknown":
+        return False
+    for key in ("os", "architecture"):
+        wanted = platform.get(key)
+        if wanted and candidate.get(key) != wanted:
+            return False
+    wanted_variant = platform.get("variant")
+    if wanted_variant and candidate.get("variant") != wanted_variant:
+        return False
+    return True
+
+
 def _token_from_challenge(www_auth: str) -> str | None:
     params: dict[str, str] = {}
     for m in re.finditer(r'(\w+)="([^"]*)"', www_auth):
@@ -499,7 +535,12 @@ def _token_from_challenge(www_auth: str) -> str | None:
         return None
 
 
-def get_remote_digest(image_name: str, local_digest: str | None = None) -> str | None:
+def get_remote_digest(
+    image_name: str,
+    local_digest: str | None = None,
+    local_image_id: str | None = None,
+    local_platform: dict | None = None,
+) -> str | None:
     try:
         registry, repo, tag = parse_image(image_name)
         url = f"https://{registry}/v2/{repo}/manifests/{tag}"
@@ -519,9 +560,24 @@ def get_remote_digest(image_name: str, local_digest: str | None = None) -> str |
                     and ("manifest.list" in ct or "image.index" in ct)):
                 try:
                     body = requests.get(url, headers=headers, timeout=10, allow_redirects=True).json()
-                    platform_digests = {m.get("digest") for m in body.get("manifests", [])}
+                    manifests = body.get("manifests", [])
+                    platform_digests = {m.get("digest") for m in manifests}
                     if local_digest in platform_digests:
                         return local_digest
+                    if local_image_id and local_platform:
+                        platform_manifest = next(
+                            (m for m in manifests if _manifest_matches_platform(m, local_platform)),
+                            None,
+                        )
+                        platform_digest = (platform_manifest or {}).get("digest")
+                        if platform_digest:
+                            manifest_url = f"https://{registry}/v2/{repo}/manifests/{platform_digest}"
+                            manifest = requests.get(
+                                manifest_url, headers=headers, timeout=10, allow_redirects=True,
+                            ).json()
+                            remote_image_id = (manifest.get("config") or {}).get("digest")
+                            if remote_image_id == local_image_id:
+                                return local_digest
                 except Exception:
                     pass
             return remote
@@ -530,14 +586,41 @@ def get_remote_digest(image_name: str, local_digest: str | None = None) -> str |
     return None
 
 
-def get_local_digest(container) -> str | None:
+def get_local_digest(container, image_name: str | None = None) -> str | None:
     try:
         digests = container.image.attrs.get("RepoDigests", [])
         if digests:
-            return digests[0].split("@", 1)[-1]
+            if image_name:
+                registry, repo, _tag = parse_image(image_name)
+                candidates = _docker_repo_candidates(registry, repo)
+                for digest_ref in digests:
+                    repo_ref = digest_ref.split("@", 1)[0]
+                    if repo_ref in candidates:
+                        return _digest_from_ref(digest_ref)
+            return _digest_from_ref(digests[0])
     except Exception:
         pass
     return None
+
+
+def get_local_image_id(container) -> str | None:
+    try:
+        return _digest_from_ref(container.image.attrs.get("Id"))
+    except Exception:
+        return None
+
+
+def get_local_platform(container) -> dict | None:
+    try:
+        attrs = container.image.attrs
+        platform = {
+            "os": attrs.get("Os"),
+            "architecture": attrs.get("Architecture"),
+            "variant": attrs.get("Variant"),
+        }
+        return platform if platform["os"] or platform["architecture"] else None
+    except Exception:
+        return None
 
 
 def _has_changelog(container) -> bool:
@@ -570,8 +653,10 @@ def _scan_host(client, host_id: str) -> dict:
         image_name = container.attrs["Config"]["Image"]
         if is_locally_built(container):
             continue
-        local_digest = get_local_digest(container)
-        remote_digest = get_remote_digest(image_name, local_digest)
+        local_digest = get_local_digest(container, image_name)
+        remote_digest = get_remote_digest(
+            image_name, local_digest, get_local_image_id(container), get_local_platform(container),
+        )
         has_update = bool(local_digest and remote_digest and local_digest != remote_digest)
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
