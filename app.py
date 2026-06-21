@@ -28,7 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.10.2"
+APP_VERSION          = "1.10.3"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -46,6 +46,7 @@ _check_running = False
 _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
 _OWN_CONTAINER_ID: str | None = None  # set at startup via _detect_own_container()
+_OWN_HOSTNAME: str | None = None      # gethostname(), fallback self-update match
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -182,13 +183,36 @@ def _ssh_keyscan_and_accept(url: str) -> bool:
 
 
 def _detect_own_container() -> None:
-    """Record our own container short ID so apply_update can detect self-updates."""
-    global _OWN_CONTAINER_ID
+    """Record our own container ID so apply_update can detect self-updates.
+
+    The hostname only equals the container ID for `docker run`; under
+    docker-compose the hostname is the service name, so we read the real
+    container ID from /proc/self/mountinfo (present regardless of hostname)
+    and keep the hostname as a fallback match against Config.Hostname.
+    """
+    global _OWN_CONTAINER_ID, _OWN_HOSTNAME
     try:
-        _OWN_CONTAINER_ID = socket.gethostname()
-        print(f"[self-update] Own container hostname: {_OWN_CONTAINER_ID}")
+        _OWN_HOSTNAME = socket.gethostname()
+    except Exception:
+        _OWN_HOSTNAME = None
+    try:
+        for _p in ("/proc/self/mountinfo", "/proc/self/cgroup"):
+            try:
+                with open(_p) as f:
+                    data = f.read()
+            except Exception:
+                continue
+            m = re.search(r"containers/([0-9a-f]{64})", data) or \
+                re.search(r"\b([0-9a-f]{64})\b", data)
+            if m:
+                _OWN_CONTAINER_ID = m.group(1)
+                break
     except Exception:
         pass
+    if not _OWN_CONTAINER_ID:
+        _OWN_CONTAINER_ID = _OWN_HOSTNAME  # fall back to old behaviour
+    print(f"[self-update] Own container id: {_OWN_CONTAINER_ID} "
+          f"(hostname: {_OWN_HOSTNAME})")
 
 
 def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
@@ -824,7 +848,12 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         # spawn a helper container using the just-pulled new image; it waits
         # for us to exit, then renames us to _old (rollback point), recreates
         # us with the new image, and rolls back automatically if it fails.
-        if host_id == "local" and _OWN_CONTAINER_ID and old_id.startswith(_OWN_CONTAINER_ID):
+        _is_self = host_id == "local" and (
+            (_OWN_CONTAINER_ID and (old_id == _OWN_CONTAINER_ID
+                                    or old_id.startswith(_OWN_CONTAINER_ID)))
+            or (_OWN_HOSTNAME and cfg.get("Hostname") == _OWN_HOSTNAME)
+        )
+        if _is_self:
             emit("\n♻ Self-update detected — docker-updater is updating itself.")
             emit("  Preparing handoff to helper container...")
             _su_short = old_id[:12]
