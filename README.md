@@ -222,10 +222,11 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
 ## How it works
 
 1. On startup (silently) and at the configured `CHECK_TIME`, docker-updater iterates all running containers
-2. For each container it extracts the local image digest from `RepoDigests`
+2. For each container it extracts the matching local image digest from `RepoDigests`
 3. It sends a `HEAD` request to the registry for the image's manifest, reading the `Docker-Content-Digest` response header — no image data is transferred
-4. If the digests differ, the container is flagged as having an update available
-5. When you click **Update**, the app:
+4. If the digests differ on a multi-arch image, it checks the platform manifest/config digest so index-only changes don't create false update alerts
+5. If the local platform image really differs from the current registry image, the container is flagged as having an update available
+6. When you click **Update**, the app:
    - Pulls the new image (streaming progress to the log modal)
    - Stops the old container and renames it to `{name}_old` (kept as a rollback target)
    - Creates and starts the new container with identical config using the Docker SDK low-level API (Watchtower pattern)
