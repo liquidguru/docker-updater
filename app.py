@@ -185,10 +185,11 @@ def _ssh_keyscan_and_accept(url: str) -> bool:
 def _detect_own_container() -> None:
     """Record our own container ID so apply_update can detect self-updates.
 
-    The hostname only equals the container ID for `docker run`; under
-    docker-compose the hostname is the service name, so we read the real
-    container ID from /proc/self/mountinfo (present regardless of hostname)
-    and keep the hostname as a fallback match against Config.Hostname.
+    The hostname normally equals the short container ID, but it stops matching
+    once a container has been recreated carrying a stale hostname (e.g. after a
+    previous self-update). Read the real container ID from /proc/self/mountinfo
+    (present regardless of hostname) and keep the hostname as a fallback match
+    against Config.Hostname.
     """
     global _OWN_CONTAINER_ID, _OWN_HOSTNAME
     try:
@@ -213,6 +214,19 @@ def _detect_own_container() -> None:
         _OWN_CONTAINER_ID = _OWN_HOSTNAME  # fall back to old behaviour
     print(f"[self-update] Own container id: {_OWN_CONTAINER_ID} "
           f"(hostname: {_OWN_HOSTNAME})")
+
+
+def _recreate_hostname(cfg: dict) -> str:
+    """Hostname to set when recreating a container.
+
+    Docker auto-assigns the short container ID (12 hex chars) as the hostname.
+    Carrying that into the recreated container leaves it permanently mismatched
+    from its own ID — which silently broke self-update detection after the first
+    successful self-update. Drop an auto-generated hostname so Docker assigns a
+    fresh matching one; preserve any hostname the user actually set.
+    """
+    h = (cfg.get("Hostname") or "")
+    return "" if re.fullmatch(r"[0-9a-f]{12}", h) else h
 
 
 def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
@@ -336,7 +350,7 @@ def _run_self_update_helper() -> None:
 
         new_c = client.api.create_container(
             image=image_name, name=name,
-            hostname=cfg.get("Hostname", ""), user=cfg.get("User", ""),
+            hostname=_recreate_hostname(cfg), user=cfg.get("User", ""),
             detach=True, environment=cfg.get("Env"), command=cfg.get("Cmd"),
             entrypoint=cfg.get("Entrypoint"), labels=cfg.get("Labels"),
             volumes=list((cfg.get("Volumes") or {}).keys()) or None,
@@ -986,7 +1000,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         try:
             new_c = client.api.create_container(
                 image=image_name, name=container_name,
-                hostname=cfg.get("Hostname", ""), user=cfg.get("User", ""),
+                hostname=_recreate_hostname(cfg), user=cfg.get("User", ""),
                 detach=True, environment=cfg.get("Env"), command=cfg.get("Cmd"),
                 entrypoint=cfg.get("Entrypoint"), labels=cfg.get("Labels"),
                 volumes=list((cfg.get("Volumes") or {}).keys()) or None,

@@ -5,7 +5,7 @@ All notable changes to docker-updater are documented here.
 ## [1.10.3] — 2026-06-22
 
 ### Fixed
-- **Self-update not detected under docker-compose** — self-update detection relied on the container hostname matching the container ID, which is only true for `docker run`. Compose sets the hostname to the service name, so docker-updater never recognised it was updating itself and silently did a normal (failed) update. It now reads its real container ID from `/proc/self/mountinfo` and also matches on `Config.Hostname`, so self-update works regardless of how the container was started (#10)
+- **Self-update only worked once, then stopped being detected** — detection compared the container hostname against the container ID. That matched on a fresh container, but the recreate step baked the *old* container's auto-generated hostname into the new one, so after the first successful self-update the hostname no longer matched the new container's ID and all later self-updates silently fell back to a normal (failed) update. Two-part fix: (1) detection now reads the real container ID from `/proc/self/mountinfo` (and also matches `Config.Hostname`), and (2) recreate no longer carries over an auto-generated 12-hex hostname, letting Docker assign a fresh matching one (user-set hostnames are still preserved). Works under both `docker run` and docker-compose (#10)
 
 ## [1.10.2] — 2026-06-21
 
