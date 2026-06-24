@@ -28,7 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.10.3"
+APP_VERSION          = "1.10.4"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -229,6 +229,42 @@ def _recreate_hostname(cfg: dict) -> str:
     return "" if re.fullmatch(r"[0-9a-f]{12}", h) else h
 
 
+def _mounts_from_hcfg(hcfg: dict):
+    """Rebuild HostConfig.Mounts (named volumes, --mount entries) for recreation.
+
+    docker-updater historically restored only HostConfig.Binds. Compose-managed
+    named volumes live in HostConfig.Mounts (Binds is null), so updating such a
+    container recreated it with NO volume attached and silently dropped its data
+    (e.g. a Grafana update wiping all dashboards). We now also carry over .Mounts.
+    Targets already present in Binds are skipped so docker-run -v + --mount combos
+    don't produce a duplicate-mount error.
+    """
+    bind_targets = set()
+    for b in (hcfg.get("Binds") or []):
+        parts = b.split(":")
+        if len(parts) >= 2:
+            bind_targets.add(parts[1])
+    out = []
+    for m in (hcfg.get("Mounts") or []):
+        target = m.get("Target")
+        if not target or target in bind_targets:
+            continue
+        try:
+            kwargs = {
+                "target": target,
+                "source": m.get("Source"),
+                "type": m.get("Type", "volume"),
+                "read_only": m.get("ReadOnly", False),
+            }
+            prop = (m.get("BindOptions") or {}).get("Propagation")
+            if prop:
+                kwargs["propagation"] = prop
+            out.append(docker.types.Mount(**kwargs))
+        except Exception as e:
+            print(f"[recreate] could not rebuild mount {target}: {e}")
+    return out or None
+
+
 def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
     """Write history + rollback entry to state.json from the self-update helper.
     Only meaningful when /app/data is mounted in the helper container."""
@@ -325,6 +361,7 @@ def _run_self_update_helper() -> None:
         network_mode = hcfg.get("NetworkMode", "bridge")
         hc = client.api.create_host_config(
             binds=hcfg.get("Binds") or [],
+            mounts=_mounts_from_hcfg(hcfg),
             port_bindings=hcfg.get("PortBindings") or {},
             network_mode=network_mode,
             restart_policy=orig_policy,
@@ -962,6 +999,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         network_mode = hcfg.get("NetworkMode", "bridge")
         hc = client.api.create_host_config(
             binds=hcfg.get("Binds") or [],
+            mounts=_mounts_from_hcfg(hcfg),
             port_bindings=hcfg.get("PortBindings") or {},
             network_mode=network_mode,
             restart_policy=hcfg.get("RestartPolicy"),

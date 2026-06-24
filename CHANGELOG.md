@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.10.4] — 2026-06-25
+
+### Fixed
+- **Data loss on update for containers with named volumes** — recreation only restored `HostConfig.Binds`, but Docker Compose stores named volumes in `HostConfig.Mounts` (where `Binds` is null). Updating a compose-managed container therefore recreated it with **no volume attached**, silently discarding its data — e.g. a Grafana update wiping every dashboard. Recreation now also rebuilds `HostConfig.Mounts` (named volumes, `--mount` entries), so volume data survives updates. Bind mounts (`docker run -v`) were unaffected. **If you run docker-updater on compose stacks, upgrade to this version before your next update.**
+
 ## [1.10.3] — 2026-06-22
 
 ### Fixed
