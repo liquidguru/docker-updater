@@ -320,3 +320,7 @@ docker rm watchtower
 ## License
 
 MIT
+
+## Acknowledgments
+
+Developed by [liquidguru](https://github.com/liquidguru) with assistance from AI coding tools (Claude by Anthropic, and Codex). All changes are reviewed and tested before release; AI-assisted commits are marked with a `Co-Authored-By` trailer.
