@@ -28,7 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.10.4"
+APP_VERSION          = "1.11.0"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -47,6 +47,13 @@ _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
 _OWN_CONTAINER_ID: str | None = None  # set at startup via _detect_own_container()
 _OWN_HOSTNAME: str | None = None      # gethostname(), fallback self-update match
+
+# Opt-in compose-stack restart (issue #12). Debounced per stack so a bulk update
+# of several members triggers only one round of sibling restarts.
+STACK_RESTART_QUIET = 8               # seconds of quiet after the last stack update
+_stack_lock     = threading.Lock()
+_stack_timers: dict[str, threading.Timer] = {}
+_stack_updated: dict[str, set] = {}   # stack key -> names just updated (excluded)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -67,7 +74,8 @@ def load_state() -> dict:
         except Exception:
             pass
     return {"available": {}, "deferred": {}, "history": [], "last_check": None,
-            "notify_url": None, "rollbacks": {}, "backup_enabled": False, "backup_hours": 24}
+            "notify_url": None, "rollbacks": {}, "backup_enabled": False,
+            "backup_hours": 24, "restart_stack": False}
 
 
 def save_state(state: dict) -> None:
@@ -263,6 +271,70 @@ def _mounts_from_hcfg(hcfg: dict):
         except Exception as e:
             print(f"[recreate] could not rebuild mount {target}: {e}")
     return out or None
+
+
+def _is_own_container(container) -> bool:
+    """True if this container is docker-updater itself (never restart it)."""
+    try:
+        cid = container.id or ""
+        if _OWN_CONTAINER_ID and (cid == _OWN_CONTAINER_ID
+                                  or cid.startswith(_OWN_CONTAINER_ID)):
+            return True
+        h = (container.attrs.get("Config") or {}).get("Hostname")
+        return bool(_OWN_HOSTNAME and h == _OWN_HOSTNAME)
+    except Exception:
+        return False
+
+
+def _schedule_stack_restart(client, host_id: str, project: str,
+                            trigger_name: str, emit) -> None:
+    """After a compose-stack member is updated, restart the OTHER members so they
+    pick up the recreated container's new IP/DNS (issue #12). Debounced per stack:
+    each update (re)starts a short timer, so a bulk update of several members only
+    restarts the untouched siblings once, after the updates settle."""
+    key = f"{host_id}:{project}"
+    with _stack_lock:
+        _stack_updated.setdefault(key, set()).add(trigger_name)
+        old = _stack_timers.get(key)
+        if old:
+            old.cancel()
+        timer = threading.Timer(STACK_RESTART_QUIET, _do_stack_restart,
+                                args=(client, host_id, project, key))
+        timer.daemon = True
+        _stack_timers[key] = timer
+        timer.start()
+    emit(f"↻ Stack '{project}': other members will be restarted in "
+         f"{STACK_RESTART_QUIET}s so they pick up the new container.")
+
+
+def _do_stack_restart(client, host_id: str, project: str, key: str) -> None:
+    with _stack_lock:
+        _stack_timers.pop(key, None)
+        updated = _stack_updated.pop(key, set())
+    try:
+        targets = []
+        for c in client.containers.list():
+            if c.name.endswith("_old") or c.name in updated:
+                continue
+            if (c.labels or {}).get("com.docker.compose.project") != project:
+                continue
+            if _container_key(c.name, host_id) in _update_running:
+                continue  # a member that's mid-update will start fresh anyway
+            if host_id == "local" and _is_own_container(c):
+                continue  # never restart docker-updater itself
+            targets.append(c)
+        if not targets:
+            print(f"[stack-restart:{host_id}] {project}: no other members to restart")
+            return
+        print(f"[stack-restart:{host_id}] {project}: restarting "
+              f"{', '.join(t.name for t in targets)}")
+        for c in targets:
+            try:
+                c.restart(timeout=30)
+            except Exception as e:
+                print(f"[stack-restart:{host_id}] {c.name} restart failed: {e}")
+    except Exception as e:
+        print(f"[stack-restart:{host_id}] {project}: enumerate failed: {e}")
 
 
 def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
@@ -1143,6 +1215,16 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                 hs.setdefault("rollbacks", {}).pop(container_name, None)
             save_host_state(host_id, hs)
 
+        # ── Restart sibling compose-stack members (opt-in, issue #12) ─────────
+        try:
+            with _state_lock:
+                _rs_enabled = load_state().get("restart_stack", False)
+            _proj = (cfg.get("Labels") or {}).get("com.docker.compose.project")
+            if _rs_enabled and _proj:
+                _schedule_stack_restart(client, host_id, _proj, container_name, emit)
+        except Exception as _rs_err:
+            print(f"[stack-restart] schedule error: {_rs_err}")
+
     except Exception as e:
         emit(f"\nERROR: {e}")
         history_entry = {
@@ -1669,6 +1751,7 @@ def api_settings_get():
     return jsonify({
         "backup_enabled": state.get("backup_enabled", False),
         "backup_hours":   state.get("backup_hours", 24),
+        "restart_stack":  state.get("restart_stack", False),
     })
 
 
@@ -1681,6 +1764,8 @@ def api_settings_post():
             state["backup_enabled"] = bool(data["backup_enabled"])
         if "backup_hours" in data:
             state["backup_hours"] = int(data["backup_hours"])
+        if "restart_stack" in data:
+            state["restart_stack"] = bool(data["restart_stack"])
         save_state(state)
     return jsonify({"ok": True})
 

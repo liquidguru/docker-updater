@@ -358,7 +358,7 @@
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  let _settings = { backup_enabled: false, backup_hours: 24 };
+  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false };
 
   async function loadSettings() {
     try {
@@ -370,7 +370,8 @@
   async function saveSettings() {
     const enabled = document.getElementById('backup-enabled').checked;
     const hours   = parseInt(document.getElementById('backup-hours').value);
-    _settings = { backup_enabled: enabled, backup_hours: hours };
+    const restartStack = document.getElementById('restart-stack')?.checked || false;
+    _settings = { backup_enabled: enabled, backup_hours: hours, restart_stack: restartStack };
     await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(_settings) });
     document.getElementById('backup-options').style.display = enabled ? '' : 'none';
@@ -426,6 +427,18 @@
             <option value="168" ${_settings.backup_hours==168 ? 'selected' : ''}>7 days</option>
           </select>
           <span class="setting-note">Stopped containers temporarily retain their previous image layer until the backup expires.</span>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Restart the rest of the Compose stack after an update</div>
+            <div class="setting-desc">When a container started by Docker Compose is updated, its other stack members are restarted (not recreated) so they pick up the new container's IP. Helps services that cache connections to a sibling. Standalone containers are unaffected.</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="restart-stack" ${_settings.restart_stack ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>`;
   }

@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.11.0] — 2026-06-26
+
+### Added
+- **Restart the rest of the Compose stack after an update** — new opt-in Settings toggle (default off). When a container started by Docker Compose is updated, its other stack members (same `com.docker.compose.project`) are **restarted** so they pick up the recreated container's new IP/DNS — handy for services that cache a connection to a sibling and would otherwise need a manual `docker compose restart`. Siblings are restarted, not recreated (no image change). Bulk updates within one stack are debounced so the untouched members restart only once, after the updates settle; the updated containers, `_old` backups, docker-updater itself, and any member still mid-update are excluded (closes #12)
+
 ## [1.10.4] — 2026-06-25
 
 ### Fixed
