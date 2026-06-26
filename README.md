@@ -30,6 +30,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **GitHub notifications** — optional webhook endpoint receives issue, PR, star, push, and release events from any of your repos and forwards them as push notifications
 - **Scheduled checks** — cron-style daily check at a configurable time and timezone; notifications only fire on the scheduled run, not on startup or manual checks
 - **Compose stack chip** — containers started by Docker Compose show a small stack name chip on the card, read from the `com.docker.compose.project` label; standalone containers are unaffected
+- **Restart the Compose stack after an update** — opt-in Settings toggle (default off): when you update a Compose-managed container, the other members of the same stack are restarted (not recreated) so they pick up the new container's IP/DNS — no more manual `docker compose restart`. Bulk updates within one stack are debounced to a single round; the updated containers, `_old` backups, docker-updater itself, and any member mid-update are excluded
 - **Self-update** — docker-updater can update its own container: it pulls the new image, then hands off the stop/recreate to a short-lived helper container (spawned from the new image) that does the restart after the old process exits, with no manual intervention required
 - **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), preserving all original config: volumes, ports, environment variables, networks, static IPs, restart policy, capabilities, etc.
 - **Backup & rollback** — optionally keep the previous container after a successful update for a configurable window (Settings tab); roll back to it in one click if the new version misbehaves, or delete the backup early to reclaim space
@@ -306,8 +307,8 @@ docker rm watchtower
 
 ## Caveats
 
-- **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed.
-- **Named volumes**: Preserved automatically — volume mounts are read from the container's `HostConfig.Binds` and reattached on recreation.
+- **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed. Optionally, the other members of the stack can be **restarted** after an update so they pick up the new container's IP (Settings → *Restart the rest of the Compose stack after an update*).
+- **Named volumes**: Preserved automatically — both bind mounts (`HostConfig.Binds`) and named/`--mount` volumes (`HostConfig.Mounts`, where Compose stores them) are reattached on recreation.
 - **Locally-built images**: Any container whose image has no `RepoDigests` is skipped (these can't be compared against a registry).
 - **Private registries**: Currently supports anonymous and Bearer-token registries. Basic auth (username/password) registries are not yet supported.
 - **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required environment variables. If an update fails with an application-level error after recreation, check the image's release notes for new required env vars.
