@@ -324,17 +324,19 @@ def _do_stack_restart(client, host_id: str, project: str, key: str) -> None:
                 continue  # never restart docker-updater itself
             targets.append(c)
         if not targets:
-            print(f"[stack-restart:{host_id}] {project}: no other members to restart")
+            print(f"[stack-restart:{host_id}] {project}: no other members to restart",
+                  flush=True)
             return
         print(f"[stack-restart:{host_id}] {project}: restarting "
-              f"{', '.join(t.name for t in targets)}")
+              f"{', '.join(t.name for t in targets)}", flush=True)
         for c in targets:
             try:
                 c.restart(timeout=30)
             except Exception as e:
-                print(f"[stack-restart:{host_id}] {c.name} restart failed: {e}")
+                print(f"[stack-restart:{host_id}] {c.name} restart failed: {e}",
+                      flush=True)
     except Exception as e:
-        print(f"[stack-restart:{host_id}] {project}: enumerate failed: {e}")
+        print(f"[stack-restart:{host_id}] {project}: enumerate failed: {e}", flush=True)
 
 
 def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
