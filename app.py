@@ -28,7 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.11.0"
+APP_VERSION          = "1.12.0"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -47,6 +47,12 @@ _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
 _OWN_CONTAINER_ID: str | None = None  # set at startup via _detect_own_container()
 _OWN_HOSTNAME: str | None = None      # gethostname(), fallback self-update match
+
+# Image cleanup jobs (issue #13). Runs in a background thread and is polled by
+# the UI, rather than one long request — a "select all" batch of many
+# multi-GB images can easily outlast a reverse proxy's read timeout.
+_prune_lock = threading.Lock()
+_prune_jobs: dict[str, dict] = {}
 
 # Opt-in compose-stack restart (issue #12). Debounced per stack so a bulk update
 # of several members triggers only one round of sibling restarts.
@@ -75,7 +81,7 @@ def load_state() -> dict:
             pass
     return {"available": {}, "deferred": {}, "history": [], "last_check": None,
             "notify_url": None, "rollbacks": {}, "backup_enabled": False,
-            "backup_hours": 24, "restart_stack": False}
+            "backup_hours": 24, "restart_stack": False, "cleanup_images": False}
 
 
 def save_state(state: dict) -> None:
@@ -271,6 +277,37 @@ def _mounts_from_hcfg(hcfg: dict):
         except Exception as e:
             print(f"[recreate] could not rebuild mount {target}: {e}")
     return out or None
+
+
+def _human_size(n: int) -> str:
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.2f}{unit}"
+        n /= 1024
+    return f"{n:.2f}TB"
+
+
+def _cleanup_old_image(client, old_image_id: str | None, new_image_id: str | None,
+                       emit=print) -> None:
+    """Remove a superseded image after an update (issue #13, opt-in via
+    Settings). Only ever touches the specific image the just-updated container
+    used to run — never a blanket prune. Silently does nothing if the image is
+    still referenced by any container (e.g. shared by another service, or a
+    kept `_old` backup), so this is always safe to call speculatively.
+    """
+    if not old_image_id or old_image_id == new_image_id:
+        return
+    try:
+        if client.containers.list(all=True, filters={"ancestor": old_image_id}):
+            return  # still in use (e.g. a kept backup) — leave it alone
+        size = client.images.get(old_image_id).attrs.get("Size", 0)
+        client.images.remove(old_image_id, force=False)
+        emit(f"▶ Removed superseded image ({_human_size(size)} freed).")
+    except docker.errors.ImageNotFound:
+        pass
+    except Exception as e:
+        emit(f"  (old image not removed: {e})")
 
 
 def _is_own_container(container) -> bool:
@@ -951,6 +988,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         hcfg        = attrs["HostConfig"]
         nets        = attrs["NetworkSettings"]["Networks"]
         image_name  = cfg.get("Image", "?")
+        old_image_id = attrs.get("Image")
 
         emit(f"Container : {container_name}")
         emit(f"Host      : {host_id}")
@@ -1067,6 +1105,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
             _bst = load_state()
         _backup_enabled = _bst.get("backup_enabled", False)
         _backup_hours   = int(_bst.get("backup_hours", 24))
+        _cleanup_images = _bst.get("cleanup_images", False)
 
         emit("▶ Recreating container...")
 
@@ -1151,9 +1190,14 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
             if _backup_enabled:
                 _expires = (datetime.datetime.utcnow() + datetime.timedelta(hours=_backup_hours)).isoformat() + "Z"
                 emit(f"  Backup '{old_name}' kept for {_backup_hours}h — rollback available.")
+                if _cleanup_images:
+                    emit("  Old image kept — backup retention is on. It will be "
+                         "removed when the backup is deleted or expires.")
             else:
                 emit("▶ Removing old container...")
                 old_container.remove()
+                if _cleanup_images:
+                    _cleanup_old_image(client, old_image_id, started.image.id, emit)
             emit(f"\nSUCCESS: {container_name} updated and running.")
 
         except Exception as recreate_err:
@@ -1647,9 +1691,12 @@ def api_status():
                 _stale_rbs.append(_rb_name)
             elif _expired:
                 try:
+                    _rb_image_id = _old_c.image.id
                     _old_c.remove()
                     print(f"[cleanup] Removed expired backup: {_rb_name}_old")
                     _stale_rbs.append(_rb_name)
+                    if _cleanup_state.get("cleanup_images", False):
+                        _cleanup_old_image(_cleanup_client, _rb_image_id, None, print)
                 except Exception as _re:
                     print(f"[cleanup] Error removing {_rb_name}_old: {_re}")
     if _stale_rbs:
@@ -1728,8 +1775,13 @@ def api_backup_delete(name):
     except Exception as e:
         return jsonify({"error": f"Docker unavailable: {e}"}), 500
     try:
-        client.containers.get(old_name).remove(force=True)
+        _bkc = client.containers.get(old_name)
+        _bkc_image_id = _bkc.image.id
+        _bkc.remove(force=True)
         print(f"[backup] Deleted backup container {old_name}")
+        with _state_lock:
+            if load_state().get("cleanup_images", False):
+                _cleanup_old_image(client, _bkc_image_id, None, print)
     except docker.errors.NotFound:
         pass
     except Exception as e:
@@ -1754,6 +1806,7 @@ def api_settings_get():
         "backup_enabled": state.get("backup_enabled", False),
         "backup_hours":   state.get("backup_hours", 24),
         "restart_stack":  state.get("restart_stack", False),
+        "cleanup_images": state.get("cleanup_images", False),
     })
 
 
@@ -1768,8 +1821,126 @@ def api_settings_post():
             state["backup_hours"] = int(data["backup_hours"])
         if "restart_stack" in data:
             state["restart_stack"] = bool(data["restart_stack"])
+        if "cleanup_images" in data:
+            state["cleanup_images"] = bool(data["cleanup_images"])
         save_state(state)
     return jsonify({"ok": True})
+
+
+def _client_for_host(host_id: str):
+    if host_id == "local":
+        return docker.from_env()
+    host = next((h for h in load_hosts() if h["id"] == host_id), None)
+    if not host:
+        raise ValueError(f"Host '{host_id}' not found.")
+    return get_docker_client(host.get("url"))
+
+
+@app.route("/api/dangling-images", methods=["GET"])
+def api_dangling_images():
+    """List dangling (untagged) images so the user can see and choose what to
+    remove, rather than pruning blind (issue #13). Docker drops an image's tag
+    once it's superseded, so we can only show id/size/age — not which
+    container it used to belong to."""
+    host_id = request.args.get("host", "local")
+    try:
+        client = _client_for_host(host_id)
+        images = client.images.list(filters={"dangling": True})
+        out = [{
+            "id": img.id,
+            "short_id": img.short_id.split(":")[-1][:12],
+            "size": img.attrs.get("Size", 0),
+            "size_human": _human_size(img.attrs.get("Size", 0)),
+            "created": img.attrs.get("Created"),
+        } for img in images]
+        out.sort(key=lambda x: x["size"], reverse=True)
+        return jsonify({"ok": True, "images": out})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _friendly_skip_reason(client, exc) -> str:
+    """Turn Docker's raw 'must be forced' conflict into a message that names
+    the actual blocking container, instead of a generic 'still in use'."""
+    explanation = getattr(exc, "explanation", None) or str(exc)
+    if isinstance(explanation, bytes):
+        explanation = explanation.decode(errors="ignore")
+    m = re.search(r"used by (running|stopped) container ([0-9a-f]+)", explanation)
+    if m:
+        state, cid = m.groups()
+        try:
+            name = client.containers.get(cid).name
+        except Exception:
+            name = cid[:12]
+        return f"still used by {state} container '{name}'"
+    if "dependent child images" in explanation:
+        return "still has dependent images that reference it"
+    return explanation.split("(")[0].strip() or "in use"
+
+
+def _run_prune_job(job_id: str, client, ids: list) -> None:
+    removed, freed, skipped = 0, 0, []
+    for image_id in ids:
+        try:
+            size = client.images.get(image_id).attrs.get("Size", 0)
+            client.images.remove(image_id, force=False)
+            removed += 1
+            freed += size
+        except docker.errors.ImageNotFound:
+            pass  # already gone — fine
+        except Exception as e:
+            skipped.append({"id": image_id[:19], "reason": _friendly_skip_reason(client, e)})
+        with _prune_lock:
+            job = _prune_jobs.get(job_id)
+            if job is None:
+                return  # job was cleared (e.g. app restarted) — stop quietly
+            job["done"] = removed + len(skipped)
+    with _prune_lock:
+        job = _prune_jobs.get(job_id)
+        if job is not None:
+            job.update(status="done", count=removed, freed=_human_size(freed),
+                      skipped=skipped)
+
+
+@app.route("/api/prune-images", methods=["POST"])
+def api_prune_images():
+    """Start a background job removing specific dangling images the user
+    selected (issue #13). Runs in a thread and is polled via GET, rather than
+    completing within one request — a "select all" batch of many multi-GB
+    images can easily outlast a reverse proxy's read timeout, and the deletes
+    would otherwise keep running server-side with the UI none the wiser.
+    Removes each image individually (not a blanket prune) so one still-in-use
+    image (e.g. referenced by a kept backup) is skipped with a reason rather
+    than blocking the rest — and, as a bonus, this sidesteps Docker's global
+    prune lock, so it can't collide with the NAS's own background cleanup."""
+    data = request.get_json(silent=True) or {}
+    host_id = data.get("host_id", "local")
+    ids = data.get("ids") or []
+    if not ids:
+        return jsonify({"error": "No images selected."}), 400
+    try:
+        client = _client_for_host(host_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": f"Docker unavailable: {e}"}), 500
+    job_id = secrets.token_hex(8)
+    with _prune_lock:
+        _prune_jobs[job_id] = {"status": "running", "total": len(ids), "done": 0}
+    threading.Thread(target=_run_prune_job, args=(job_id, client, ids), daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/prune-images/<job_id>", methods=["GET"])
+def api_prune_images_status(job_id):
+    with _prune_lock:
+        job = _prune_jobs.get(job_id)
+        if job is None:
+            return jsonify({"error": "Job not found."}), 404
+        result = dict(job)
+        if result["status"] == "done":
+            _prune_jobs.pop(job_id, None)  # one-shot: UI has already polled it
+    return jsonify(result)
 
 
 @app.route("/api/defer/<name>", methods=["POST"])

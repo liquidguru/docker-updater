@@ -358,7 +358,7 @@
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false };
+  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false };
 
   async function loadSettings() {
     try {
@@ -370,8 +370,10 @@
   async function saveSettings() {
     const enabled = document.getElementById('backup-enabled').checked;
     const hours   = parseInt(document.getElementById('backup-hours').value);
-    const restartStack = document.getElementById('restart-stack')?.checked || false;
-    _settings = { backup_enabled: enabled, backup_hours: hours, restart_stack: restartStack };
+    const restartStack   = document.getElementById('restart-stack')?.checked || false;
+    const cleanupImages  = document.getElementById('cleanup-images')?.checked || false;
+    _settings = { backup_enabled: enabled, backup_hours: hours,
+                  restart_stack: restartStack, cleanup_images: cleanupImages };
     await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(_settings) });
     document.getElementById('backup-options').style.display = enabled ? '' : 'none';
@@ -440,7 +442,165 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
+      </div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Remove the old image after an update</div>
+            <div class="setting-desc">After a successful update, the superseded image is deleted to reclaim disk space. While backup retention (above) is on, the old image is kept with the backup and only removed when that backup is deleted or expires — it's never pulled out from under a rollback point.</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="cleanup-images" ${_settings.cleanup_images ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="backup-options">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <button class="btn-secondary btn-sm" id="prune-btn" onclick="loadDanglingImages()">Show reclaimable images</button>
+            <span class="setting-note">Lists dangling (untagged) images — pick which to delete, or select all. Only images not used by any container can be removed; named volumes are never touched.</span>
+          </div>
+          <div id="prune-list"></div>
+          <div id="prune-result" style="margin-top:8px;font-size:13px"></div>
+        </div>
       </div>`;
+  }
+
+  let _danglingImages = [];
+
+  async function loadDanglingImages() {
+    const btn  = document.getElementById('prune-btn');
+    const list = document.getElementById('prune-list');
+    const out  = document.getElementById('prune-result');
+    out.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    try {
+      const r = await fetch('/api/dangling-images');
+      const d = await r.json();
+      if (!r.ok) { out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error}`; return; }
+      _danglingImages = d.images || [];
+      renderDanglingList();
+    } catch (e) {
+      out.style.color = 'var(--red)'; out.textContent = '⚠️ Could not load images.';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Refresh list';
+    }
+  }
+
+  function renderDanglingList() {
+    const list = document.getElementById('prune-list');
+    if (!_danglingImages.length) {
+      list.innerHTML = `<div class="setting-note" style="margin-top:8px">No dangling images — nothing to reclaim right now.</div>`;
+      return;
+    }
+    const rows = _danglingImages.map(img => `
+      <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <input type="checkbox" class="prune-check" value="${esc(img.id)}" data-size="${img.size}" onchange="updatePruneTotal()">
+        <code style="color:var(--muted)">${esc(img.short_id)}</code>
+        <span>${esc(img.size_human)}</span>
+        <span class="setting-note" style="margin-left:auto">${esc(timeAgo(img.created))}</span>
+      </label>`).join('');
+    list.innerHTML = `
+      <div style="margin-top:10px;max-height:260px;overflow-y:auto">
+        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;font-weight:600">
+          <input type="checkbox" id="prune-select-all" onchange="toggleAllPrune(this.checked)">
+          Select all (${_danglingImages.length} image${_danglingImages.length===1?'':'s'}, ${_human_size_js(_danglingImages.reduce((s,i)=>s+i.size,0))})
+        </label>
+        ${rows}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+        <button class="btn-danger btn-sm" id="prune-delete-btn" onclick="deleteSelectedImages()" disabled>Delete selected</button>
+        <span id="prune-selected-total" class="setting-note"></span>
+      </div>`;
+  }
+
+  function toggleAllPrune(checked) {
+    document.querySelectorAll('.prune-check').forEach(cb => cb.checked = checked);
+    updatePruneTotal();
+  }
+
+  function updatePruneTotal() {
+    const checked = [...document.querySelectorAll('.prune-check:checked')];
+    const total = checked.reduce((s, cb) => s + Number(cb.dataset.size), 0);
+    document.getElementById('prune-delete-btn').disabled = checked.length === 0;
+    document.getElementById('prune-selected-total').textContent =
+      checked.length ? `${checked.length} selected — ${_human_size_js(total)}` : '';
+  }
+
+  function _human_size_js(n) {
+    const units = ['B','KB','MB','GB','TB'];
+    let i = 0;
+    n = Number(n) || 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return i === 0 ? `${n.toFixed(0)}${units[i]}` : `${n.toFixed(2)}${units[i]}`;
+  }
+
+  async function deleteSelectedImages() {
+    const ids = [...document.querySelectorAll('.prune-check:checked')].map(cb => cb.value);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} image(s)? This cannot be undone.`)) return;
+    const btn = document.getElementById('prune-delete-btn');
+    const out = document.getElementById('prune-result');
+    btn.disabled = true;
+    btn.textContent = 'Deleting…';
+    out.style.color = 'var(--muted)';
+    out.textContent = `Working — 0/${ids.length}…`;
+    try {
+      const r = await fetch('/api/prune-images', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ ids }) });
+      const d = await r.json();
+      if (!r.ok || !d.job_id) {
+        out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error || 'Could not start deletion.'}`;
+        return;
+      }
+      await pollPruneJob(d.job_id, out);
+    } catch (e) {
+      out.style.color = 'var(--red)'; out.textContent = '⚠️ Could not delete images.';
+    } finally {
+      btn.textContent = 'Delete selected';
+      btn.disabled = false;
+      await loadDanglingImages();
+    }
+  }
+
+  async function pollPruneJob(jobId, out) {
+    // Runs server-side in a background thread — polled rather than awaited in
+    // one request, since a large "select all" batch of multi-GB images can
+    // easily outlast a reverse proxy's read timeout.
+    while (true) {
+      await new Promise(res => setTimeout(res, 1500));
+      let r, d;
+      try {
+        r = await fetch(`/api/prune-images/${jobId}`);
+        d = await r.json();
+      } catch (e) {
+        continue; // transient network hiccup while polling — keep trying
+      }
+      if (r.status === 404) {
+        out.style.color = 'var(--red)';
+        out.textContent = '⚠️ Lost track of the job (server may have restarted) — refresh the list to check results.';
+        return;
+      }
+      if (!r.ok) {
+        out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error || 'Could not check progress.'}`;
+        return;
+      }
+      if (d.status === 'running') {
+        out.style.color = 'var(--muted)';
+        out.textContent = `Working — ${d.done}/${d.total}…`;
+        continue;
+      }
+      out.style.color = 'var(--green)';
+      let html = `✅ Freed ${d.freed} across ${d.count} image(s).`;
+      if (d.skipped && d.skipped.length) {
+        const items = d.skipped.map(s => `<li><code>${esc(s.id)}</code> — ${esc(s.reason)}</li>`).join('');
+        html += `<div style="color:var(--muted);margin-top:6px">${d.skipped.length} skipped:</div>
+          <ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">${items}</ul>`;
+      }
+      out.innerHTML = html;
+      return;
+    }
   }
 
   function confirmRollback(name, hostId = 'local') {

@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.12.0] — 2026-06-30
+
+### Added
+- **Remove the old image after an update** — new opt-in Settings toggle (default off). After a successful update, the superseded image is removed to reclaim disk space. Backup-aware by design: while "Keep backup after successful update" is on, the old image is left alone (the `_old` container still references it) and is only removed when that backup is later deleted or expires — the image cleanup hooks into both the manual "Delete backup" action and the automatic expiry sweep, so retention users still get the space back eventually, just later
+- **"Show reclaimable images" list** (Settings) — lists dangling (untagged) images with size and age, so you can see exactly what's being removed instead of a black-box prune. Select individual images or "Select all", then "Delete selected". Runs as a background job with live progress (`Working — X/Y…`), so a large "select all" batch of many multi-GB images can't be cut short by a reverse-proxy timeout. Removes images one at a time by ID rather than a blanket `docker image prune`, which as a side benefit avoids colliding with the NAS's own background image cleanup (no more "a prune operation is already running")
+- **Named skip reasons** — if an image can't be removed because it's still referenced, the result names the actual blocking container (e.g. *"still used by stopped container 'dispatcharr-redis'"*) instead of a generic error, so it's obvious what to clean up first
+- Deliberately **images only** — no volume pruning, and no removal of images still in use by any container or a kept backup (closes #13)
+
 ## [1.11.0] — 2026-06-26
 
 ### Added
