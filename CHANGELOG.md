@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.12.1] — 2026-07-12
+
+### Added
+- **Repository name shown for reclaimable images** — the "Show reclaimable images" list now displays each image's repo (e.g. `ghcr.io/home-assistant/home-assistant`) instead of just a bare hash. Docker drops the human-readable `:tag` once an image is superseded, but the `RepoDigests` entry recorded at pull time usually survives, so the repo name can still be shown (same technique Portainer uses). Falls back to "unknown image" if no digest reference remains (closes #13 follow-up, thanks @monkeyotg)
+
 ## [1.12.0] — 2026-07-11
 
 ### Added

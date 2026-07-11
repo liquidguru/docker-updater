@@ -28,7 +28,7 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.12.0"
+APP_VERSION          = "1.12.1"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -1836,12 +1836,23 @@ def _client_for_host(host_id: str):
     return get_docker_client(host.get("url"))
 
 
+def _repo_name_from_image(img) -> str | None:
+    """Best-guess repository name for a dangling (untagged) image. Docker
+    drops the human-readable tag once an image is superseded, but a
+    RepoDigests entry (the digest-pinned reference recorded at pull time)
+    usually survives — so 'owner/repo' can still be shown even though the
+    :tag is gone (same trick Portainer uses)."""
+    for ref in (img.attrs.get("RepoDigests") or []):
+        repo = ref.split("@")[0]
+        if repo:
+            return repo
+    return None
+
+
 @app.route("/api/dangling-images", methods=["GET"])
 def api_dangling_images():
     """List dangling (untagged) images so the user can see and choose what to
-    remove, rather than pruning blind (issue #13). Docker drops an image's tag
-    once it's superseded, so we can only show id/size/age — not which
-    container it used to belong to."""
+    remove, rather than pruning blind (issue #13)."""
     host_id = request.args.get("host", "local")
     try:
         client = _client_for_host(host_id)
@@ -1849,6 +1860,7 @@ def api_dangling_images():
         out = [{
             "id": img.id,
             "short_id": img.short_id.split(":")[-1][:12],
+            "repo": _repo_name_from_image(img),
             "size": img.attrs.get("Size", 0),
             "size_human": _human_size(img.attrs.get("Size", 0)),
             "created": img.attrs.get("Created"),

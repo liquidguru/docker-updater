@@ -498,6 +498,7 @@
       <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
         <input type="checkbox" class="prune-check" value="${esc(img.id)}" data-size="${img.size}" onchange="updatePruneTotal()">
         <code style="color:var(--muted)">${esc(img.short_id)}</code>
+        ${img.repo ? `<span title="${esc(img.repo)}">${esc(img.repo)}</span>` : `<span class="setting-note">unknown image</span>`}
         <span>${esc(img.size_human)}</span>
         <span class="setting-note" style="margin-left:auto">${esc(timeAgo(img.created))}</span>
       </label>`).join('');
