@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.12.2] — 2026-07-13
+
+### Fixed
+- **Reclaimable images list layout** — the repo name, size, and age columns were crammed together with no fixed alignment, and a long repo name could force horizontal overflow that threw off where the list's scrollbar landed. Rebuilt as a proper grid with fixed-width columns for the ID/size/age and a truncating (ellipsis + hover tooltip) column for the repo name, with `overflow-x: hidden` on the scroll container so the vertical scrollbar stays cleanly on the right edge (#13, thanks @monkeyotg)
+
 ## [1.12.1] — 2026-07-12
 
 ### Added

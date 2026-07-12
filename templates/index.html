@@ -494,19 +494,21 @@
       list.innerHTML = `<div class="setting-note" style="margin-top:8px">No dangling images — nothing to reclaim right now.</div>`;
       return;
     }
+    const rowCols = 'grid-template-columns:20px 100px minmax(0,1fr) 72px 64px';
     const rows = _danglingImages.map(img => `
-      <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <label style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;border-bottom:1px solid var(--border);font-size:13px">
         <input type="checkbox" class="prune-check" value="${esc(img.id)}" data-size="${img.size}" onchange="updatePruneTotal()">
-        <code style="color:var(--muted)">${esc(img.short_id)}</code>
-        ${img.repo ? `<span title="${esc(img.repo)}">${esc(img.repo)}</span>` : `<span class="setting-note">unknown image</span>`}
-        <span>${esc(img.size_human)}</span>
-        <span class="setting-note" style="margin-left:auto">${esc(timeAgo(img.created))}</span>
+        <code style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(img.short_id)}</code>
+        ${img.repo ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(img.repo)}">${esc(img.repo)}</span>` : `<span class="setting-note">unknown image</span>`}
+        <span style="text-align:right">${esc(img.size_human)}</span>
+        <span class="setting-note" style="text-align:right">${esc(timeAgo(img.created))}</span>
       </label>`).join('');
     list.innerHTML = `
-      <div style="margin-top:10px;max-height:260px;overflow-y:auto">
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;font-weight:600">
+      <div style="margin-top:10px;max-height:260px;overflow-y:auto;overflow-x:hidden">
+        <label style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;font-size:13px;font-weight:600">
           <input type="checkbox" id="prune-select-all" onchange="toggleAllPrune(this.checked)">
-          Select all (${_danglingImages.length} image${_danglingImages.length===1?'':'s'}, ${_human_size_js(_danglingImages.reduce((s,i)=>s+i.size,0))})
+          <span style="grid-column:2 / span 3">Select all (${_danglingImages.length} image${_danglingImages.length===1?'':'s'})</span>
+          <span style="text-align:right">${_human_size_js(_danglingImages.reduce((s,i)=>s+i.size,0))}</span>
         </label>
         ${rows}
       </div>
