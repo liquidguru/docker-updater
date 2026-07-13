@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.12.3] — 2026-07-14
+
+### Fixed
+- **Reclaimable images list not full-width** — the list sat inside a flex row (`.backup-options`) alongside the "Show reclaimable images" button, and flex items don't stretch to fill their container by default — so the list stayed narrower than the rest of the Settings panel, leaving dead space on the right. Made this card's container stack vertically and stretch its children to full width (#13, thanks @monkeyotg)
+
 ## [1.12.2] — 2026-07-13
 
 ### Fixed

@@ -454,12 +454,12 @@
             <span class="toggle-slider"></span>
           </label>
         </div>
-        <div class="backup-options">
+        <div class="backup-options" style="flex-direction:column;align-items:stretch">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <button class="btn-secondary btn-sm" id="prune-btn" onclick="loadDanglingImages()">Show reclaimable images</button>
             <span class="setting-note">Lists dangling (untagged) images — pick which to delete, or select all. Only images not used by any container can be removed; named volumes are never touched.</span>
           </div>
-          <div id="prune-list"></div>
+          <div id="prune-list" style="width:100%"></div>
           <div id="prune-result" style="margin-top:8px;font-size:13px"></div>
         </div>
       </div>`;
