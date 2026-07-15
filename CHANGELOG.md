@@ -5,6 +5,7 @@ All notable changes to docker-updater are documented here.
 ## [1.13.0] — 2026-07-15
 
 ### Added
+- **Theme picker** — a new **Appearance** section in Settings with six themes: GitHub Dark (default), Midnight, Nord, Dracula, Carbon, and **Light**. Applies instantly, and is saved to `state.json` so it persists across restarts and image updates. Rendered server-side, so the page never flashes the previous theme on load. Status colours keep their meaning in every theme — green is always good, red is always a problem — and are re-tuned per theme for contrast (Light uses darker greens/reds so they stay legible on a pale background)
 - **Configurable check schedule in Settings** — the check frequency is no longer locked to a daily check set only via an environment variable. A new **Check Schedule** section in Settings offers presets (every 6 hours, every 12 hours, daily, weekly, monthly) with a time picker, plus day-of-week for weekly and day-of-month for monthly — no cron knowledge required. Changes apply immediately to the running scheduler; no container restart needed, and the next scheduled run is shown so it's clear what's in effect (closes #14)
 - **Custom cron expressions** — for finer control, the schedule can be set to a standard 5-field cron expression (e.g. `0 3 * * 0` for weekly on Sunday, `0 */6 * * *` for every 6 hours), from the same Settings section or via `CHECK_TIME`
 - **`CHECK_TIME` also accepts a cron expression** — previously `HH:MM` only. Plain `HH:MM` still works unchanged, so existing setups need no config change
@@ -14,6 +15,9 @@ All notable changes to docker-updater are documented here.
 
 ### Fixed
 - An unparsable schedule now falls back to the 03:00 daily default instead of preventing startup; an invalid cron submitted from Settings is rejected with a clear error and leaves the existing schedule untouched
+
+### Internal
+- The UI's translucent tints (status badges, banners, chips) were hardcoded `rgba()` values baked to the dark palette's exact RGB. They now derive from the theme's own colours via `color-mix()`, so a theme only needs to define 11 variables. This also fixed three colours that would have been unreadable in Light mode — the update log and changelog body text were a fixed pale grey, and the Compose stack chip a fixed bright purple
 
 ## [1.12.3] — 2026-07-14
 

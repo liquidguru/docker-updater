@@ -30,6 +30,10 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__)
 
 APP_VERSION          = "1.13.0"
+# Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
+# templates/index.html — an unknown value falls back to DEFAULT_THEME.
+THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
+DEFAULT_THEME        = "github"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -82,7 +86,8 @@ def load_state() -> dict:
             pass
     return {"available": {}, "deferred": {}, "history": [], "last_check": None,
             "notify_url": None, "rollbacks": {}, "backup_enabled": False,
-            "backup_hours": 24, "restart_stack": False, "cleanup_images": False}
+            "backup_hours": 24, "restart_stack": False, "cleanup_images": False,
+            "theme": DEFAULT_THEME}
 
 
 def save_state(state: dict) -> None:
@@ -1535,7 +1540,11 @@ def webhook_github():
 
 @app.route("/")
 def index():
-    return render_template("index.html", version=APP_VERSION)
+    with _state_lock:
+        theme = load_state().get("theme", DEFAULT_THEME)
+    if theme not in THEMES:
+        theme = DEFAULT_THEME
+    return render_template("index.html", version=APP_VERSION, theme=theme)
 
 
 @app.route("/api/status")
@@ -1808,6 +1817,8 @@ def api_settings_get():
         "backup_hours":   state.get("backup_hours", 24),
         "restart_stack":  state.get("restart_stack", False),
         "cleanup_images": state.get("cleanup_images", False),
+        "theme":          state.get("theme", DEFAULT_THEME),
+        "themes":         THEMES,
         "check_schedule": state.get("check_schedule") or _default_schedule_from_env(),
         "schedule_source": "settings" if state.get("check_schedule") else "env",
         "check_time_env": CHECK_TIME.strip(),
@@ -1838,6 +1849,8 @@ def api_settings_post():
             state["restart_stack"] = bool(data["restart_stack"])
         if "cleanup_images" in data:
             state["cleanup_images"] = bool(data["cleanup_images"])
+        if "theme" in data and data["theme"] in THEMES:
+            state["theme"] = data["theme"]
         if "check_schedule" in data:
             state["check_schedule"] = data["check_schedule"]
         save_state(state)

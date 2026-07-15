@@ -41,7 +41,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **Multi-arch image** — published for `linux/amd64` and `linux/arm64`, so it runs on x86 servers and ARM boards (Raspberry Pi, etc.)
 - **Locally-built images skipped** — containers with no `RepoDigests` (built from local Dockerfiles) are automatically ignored
 - **Persistent state** — update history, deferred decisions, and last-check timestamps survive container restarts
-- **Dark UI** — tabbed dashboard: Updates / Deferred / Backups / Up to Date / Unchecked / All / Hosts / Settings
+- **Themeable UI** — tabbed dashboard (Updates / Deferred / Backups / Up to Date / Unchecked / All / Hosts / Settings) with six themes to pick from in Settings: GitHub Dark, Midnight, Nord, Dracula, Carbon, and Light. Applies instantly and persists across restarts and updates
 
 ---
 
@@ -112,6 +112,16 @@ Save as `docker-compose.yml`, create a `data/` directory alongside it, then run 
 | `NOTIFY_URL` | *(auto)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications. If not set, a unique private ntfy.sh topic is generated automatically. |
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Secret for verifying GitHub webhook signatures. Required if using the GitHub notifications feature. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker socket path |
+
+---
+
+## Themes
+
+**Settings → Appearance** offers six themes: **GitHub Dark** (default), **Midnight**, **Nord**, **Dracula**, **Carbon**, and **Light**. Pick one and it applies immediately; it's saved to `state.json` on your data volume, so it persists across restarts and image updates, and it's rendered server-side so the page never flashes the old theme on load.
+
+Status colours keep their meaning in every theme — green always means good, red always means a problem — and are re-tuned per theme for contrast (Light uses darker greens and reds so they stay legible on a pale background).
+
+Adding your own is easy: each theme is a single `[data-theme="..."]` block of 11 CSS variables in `templates/index.html`; every translucent tint across the UI is derived from those via `color-mix()`. Add the block, then add the name to `THEMES` in `app.py`.
 
 ---
 

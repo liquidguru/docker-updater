@@ -1,5 +1,7 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- Theme is rendered server-side rather than applied by JS on load, so the
+     page never paints in the wrong theme first and then flip. -->
+<html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,11 +9,47 @@
 <link rel="icon" type="image/png" href="/static/favicon.png">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
+
+  /* Themes. Each defines the full palette; status colours keep their meaning
+     (green = good, red = bad) and are only re-tuned for contrast against that
+     theme's background. All the translucent tints across the UI derive from
+     these via color-mix(), so a theme only ever needs these 11 values. */
+  :root, [data-theme="github"] {
     --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
     --border: #30363d; --text: #e6edf3; --muted: #7d8590;
     --green: #3fb950; --orange: #d29922; --blue: #58a6ff;
     --red: #f85149; --purple: #bc8cff;
+  }
+  [data-theme="midnight"] {
+    --bg: #070b14; --surface: #0e1526; --surface2: #172136;
+    --border: #24314d; --text: #e3e9f5; --muted: #7a88a8;
+    --green: #3fd07f; --orange: #e8a33d; --blue: #5b9dff;
+    --red: #ff6b63; --purple: #b98cff;
+  }
+  [data-theme="nord"] {
+    --bg: #2e3440; --surface: #3b4252; --surface2: #434c5e;
+    --border: #4c566a; --text: #eceff4; --muted: #9aa5b8;
+    --green: #a3be8c; --orange: #ebcb8b; --blue: #88c0d0;
+    --red: #bf616a; --purple: #b48ead;
+  }
+  [data-theme="dracula"] {
+    --bg: #21222c; --surface: #282a36; --surface2: #343746;
+    --border: #44475a; --text: #f8f8f2; --muted: #8f92a8;
+    --green: #50fa7b; --orange: #ffb86c; --blue: #8be9fd;
+    --red: #ff5555; --purple: #bd93f9;
+  }
+  [data-theme="carbon"] {
+    --bg: #131313; --surface: #1c1c1c; --surface2: #272727;
+    --border: #3a3a3a; --text: #ededed; --muted: #8a8a8a;
+    --green: #4bb865; --orange: #d99e2b; --blue: #6ba7e8;
+    --red: #e5534b; --purple: #a986e0;
+  }
+  /* Light: status colours darkened so they stay legible on a pale background. */
+  [data-theme="light"] {
+    --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2;
+    --border: #d0d7de; --text: #1f2328; --muted: #656d76;
+    --green: #1a7f37; --orange: #9a6700; --blue: #0969da;
+    --red: #cf222e; --purple: #8250df;
   }
   body { background:var(--bg); color:var(--text); font-family:'Segoe UI',system-ui,sans-serif; font-size:14px; line-height:1.5; min-height:100vh; }
 
@@ -65,7 +103,7 @@
   .container-card.status-deferred { border-left:3px solid var(--blue); }
   .container-card.status-unknown  { border-left:3px solid var(--border); }
   .container-card.updating        { border-left:3px solid var(--purple); }
-  .container-card.selected { background:rgba(210,153,34,.06); border-color:rgba(210,153,34,.45); }
+  .container-card.selected { background:color-mix(in srgb, var(--orange) 6%, transparent); border-color:color-mix(in srgb, var(--orange) 45%, transparent); }
 
   .card-cb-wrap { display:flex; align-items:center; padding-right:2px; }
   .card-info { min-width:0; }
@@ -75,18 +113,18 @@
   .card-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 
   .host-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--muted); white-space:nowrap; }
-  .host-chip.online  { border-color:rgba(63,185,80,.3); color:var(--green); }
-  .host-chip.offline { border-color:rgba(248,81,73,.3); color:var(--red); }
-  .compose-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid rgba(130,100,240,.3); border-radius:10px; padding:1px 7px; font-size:10px; color:#a78bfa; white-space:nowrap; }
+  .host-chip.online  { border-color:color-mix(in srgb, var(--green) 30%, transparent); color:var(--green); }
+  .host-chip.offline { border-color:color-mix(in srgb, var(--red) 30%, transparent); color:var(--red); }
+  .compose-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--purple); white-space:nowrap; }
 
   .badge-status { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.4px; }
-  .badge-update   { background:rgba(210,153,34,.15); color:var(--orange); border:1px solid rgba(210,153,34,.3); }
-  .badge-ok       { background:rgba(63,185,80,.12);  color:var(--green);  border:1px solid rgba(63,185,80,.25); }
-  .badge-deferred { background:rgba(88,166,255,.12); color:var(--blue);   border:1px solid rgba(88,166,255,.25); }
-  .badge-unknown  { background:rgba(125,133,144,.1); color:var(--muted);  border:1px solid var(--border); }
-  .badge-updating { background:rgba(188,140,255,.15); color:var(--purple); border:1px solid rgba(188,140,255,.3); }
+  .badge-update   { background:color-mix(in srgb, var(--orange) 15%, transparent); color:var(--orange); border:1px solid color-mix(in srgb, var(--orange) 30%, transparent); }
+  .badge-ok       { background:color-mix(in srgb, var(--green) 12%, transparent);  color:var(--green);  border:1px solid color-mix(in srgb, var(--green) 25%, transparent); }
+  .badge-deferred { background:color-mix(in srgb, var(--blue) 12%, transparent); color:var(--blue);   border:1px solid color-mix(in srgb, var(--blue) 25%, transparent); }
+  .badge-unknown  { background:color-mix(in srgb, var(--muted) 10%, transparent); color:var(--muted);  border:1px solid var(--border); }
+  .badge-updating { background:color-mix(in srgb, var(--purple) 15%, transparent); color:var(--purple); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); }
 
-  .spinner { width:12px; height:12px; border:2px solid rgba(188,140,255,.3); border-top-color:var(--purple); border-radius:50%; animation:spin .7s linear infinite; display:inline-block; }
+  .spinner { width:12px; height:12px; border:2px solid color-mix(in srgb, var(--purple) 30%, transparent); border-top-color:var(--purple); border-radius:50%; animation:spin .7s linear infinite; display:inline-block; }
   @keyframes spin { to { transform:rotate(360deg); } }
 
   .section-title { font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:28px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); }
@@ -119,8 +157,8 @@
   .form-row { display:flex; gap:10px; }
   .form-row > div { flex:1; }
   .test-result { font-size:12px; padding:6px 10px; border-radius:6px; margin-top:4px; }
-  .test-result.ok    { background:rgba(63,185,80,.1); color:var(--green); border:1px solid rgba(63,185,80,.2); }
-  .test-result.error { background:rgba(248,81,73,.1); color:var(--red);   border:1px solid rgba(248,81,73,.2); }
+  .test-result.ok    { background:color-mix(in srgb, var(--green) 10%, transparent); color:var(--green); border:1px solid color-mix(in srgb, var(--green) 20%, transparent); }
+  .test-result.error { background:color-mix(in srgb, var(--red) 10%, transparent); color:var(--red);   border:1px solid color-mix(in srgb, var(--red) 20%, transparent); }
 
   /* Modals */
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.7); z-index:200; align-items:center; justify-content:center; }
@@ -130,7 +168,7 @@
   .modal-header h3 { font-size:14px; font-weight:600; }
   .modal-body { flex:1; overflow-y:auto; }
   .modal-footer { padding:12px 16px; border-top:1px solid var(--border); display:flex; justify-content:flex-end; gap:8px; align-items:center; }
-  .log-output { font-family:'Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; line-height:1.6; padding:16px; white-space:pre-wrap; word-break:break-all; color:#cdd9e5; min-height:200px; }
+  .log-output { font-family:'Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; line-height:1.6; padding:16px; white-space:pre-wrap; word-break:break-all; color:var(--text); min-height:200px; }
   .log-success { color:var(--green); font-weight:600; }
   .log-error   { color:var(--red);   font-weight:600; }
   .log-section { color:var(--blue); }
@@ -145,8 +183,8 @@
   .release-name { font-weight:600; font-size:14px; }
   .release-tag { font-family:monospace; font-size:11px; color:var(--muted); background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 6px; }
   .release-date { font-size:11px; color:var(--muted); margin-left:auto; white-space:nowrap; }
-  .release-prerelease { font-size:11px; color:var(--orange); background:rgba(210,153,34,.12); border:1px solid rgba(210,153,34,.3); border-radius:4px; padding:1px 6px; }
-  .release-body { font-size:13px; line-height:1.65; color:#cdd9e5; white-space:pre-wrap; word-break:break-word; }
+  .release-prerelease { font-size:11px; color:var(--orange); background:color-mix(in srgb, var(--orange) 12%, transparent); border:1px solid color-mix(in srgb, var(--orange) 30%, transparent); border-radius:4px; padding:1px 6px; }
+  .release-body { font-size:13px; line-height:1.65; color:var(--text); white-space:pre-wrap; word-break:break-word; }
   .release-body strong { color:var(--text); }
   .release-body code { font-family:monospace; background:var(--surface2); border-radius:3px; padding:1px 4px; font-size:11px; }
   .release-body a { color:var(--blue); }
@@ -166,10 +204,10 @@
   input:checked + .toggle-slider { background:var(--green); }
   input:checked + .toggle-slider:before { transform:translateX(18px); }
   .backup-options { margin-top:14px; padding-top:14px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .backup-options select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; color:var(--text); font-family:inherit; }
-  .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:rgba(188,140,255,.12); color:var(--purple); border:1px solid rgba(188,140,255,.3); }
+  .settings-card select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; color:var(--text); font-family:inherit; }
+  .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:color-mix(in srgb, var(--purple) 12%, transparent); color:var(--purple); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); }
 
-  #checking-banner { display:none; background:rgba(88,166,255,.08); border:1px solid rgba(88,166,255,.2); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--blue); align-items:center; gap:8px; }
+  #checking-banner { display:none; background:color-mix(in srgb, var(--blue) 8%, transparent); border:1px solid color-mix(in srgb, var(--blue) 20%, transparent); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--blue); align-items:center; gap:8px; }
   /* Settings */
   .settings-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:8px; }
   .setting-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
@@ -184,11 +222,11 @@
   input:checked + .toggle-slider { background:var(--green); }
   input:checked + .toggle-slider:before { transform:translateX(18px); }
   .backup-options { margin-top:14px; padding-top:14px; border-top:1px solid var(--border); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  .backup-options select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; color:var(--text); font-family:inherit; }
-  .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:rgba(188,140,255,.12); color:var(--purple); border:1px solid rgba(188,140,255,.3); }
+  .settings-card select { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:13px; color:var(--text); font-family:inherit; }
+  .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:color-mix(in srgb, var(--purple) 12%, transparent); color:var(--purple); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); }
 
   #checking-banner.visible { display:flex; }
-  #notify-banner { display:none; background:rgba(63,185,80,.08); border:1px solid rgba(63,185,80,.25); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--green); align-items:center; gap:10px; flex-wrap:wrap; }
+  #notify-banner { display:none; background:color-mix(in srgb, var(--green) 8%, transparent); border:1px solid color-mix(in srgb, var(--green) 25%, transparent); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--green); align-items:center; gap:10px; flex-wrap:wrap; }
   #notify-banner.visible { display:flex; }
   @media (max-width: 640px) {
     header { padding:12px 14px; }
@@ -367,6 +405,15 @@
     } catch (e) {}
   }
 
+  async function onThemeChange(theme) {
+    // Apply immediately for instant feedback, then persist. The server also
+    // renders data-theme on load, so it survives a refresh without a flash.
+    document.documentElement.setAttribute('data-theme', theme);
+    _settings.theme = theme;
+    await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ theme }) });
+  }
+
   function collectSchedule() {
     const preset = document.getElementById('sched-preset')?.value;
     if (!preset) return null;
@@ -454,8 +501,23 @@
     const panel = document.getElementById('settings-panel');
     const s = _settings.check_schedule || { preset:'daily', time:'03:00', day_of_week:'0', day_of_month:'1', cron:'' };
     const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const themeNames = { github:'GitHub Dark', midnight:'Midnight', nord:'Nord',
+                         dracula:'Dracula', carbon:'Carbon', light:'Light' };
+    const themes = _settings.themes || Object.keys(themeNames);
     panel.innerHTML = `
-      <div class="section-title" style="margin-top:0">Check Schedule</div>
+      <div class="section-title" style="margin-top:0">Appearance</div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">Theme</div>
+            <div class="setting-desc">Changes the dashboard's colours. Status colours keep their meaning — green is always good, red is always a problem.</div>
+          </div>
+          <select id="theme-select" onchange="onThemeChange(this.value)">
+            ${themes.map(t => `<option value="${esc(t)}" ${_settings.theme===t?'selected':''}>${esc(themeNames[t] || t)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="section-title">Check Schedule</div>
       <div class="settings-card">
         <div class="setting-row">
           <div>
