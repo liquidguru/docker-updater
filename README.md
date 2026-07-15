@@ -28,7 +28,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 - **Smart history icons** — recent updates show ✅ (succeeded or running & up-to-date), ⚠️ (errored but container still running), or ❌ (errored and stopped), with a `● running / ● stopped` dot for every row; hover the icon to see the error message without opening the log
 - **Push notifications** — auto-generates a private ntfy topic on first run; or bring your own Apprise URL (ntfy, Pushover, Discord, Slack, etc.)
 - **GitHub notifications** — optional webhook endpoint receives issue, PR, star, push, and release events from any of your repos and forwards them as push notifications
-- **Scheduled checks** — cron-style daily check at a configurable time and timezone; notifications only fire on the scheduled run, not on startup or manual checks
+- **Scheduled checks** — configurable from the **Settings** tab with presets (every 6/12 hours, daily, weekly, monthly) or a custom cron expression; changes apply immediately with no restart, and the next run time is shown. The schedule persists on the data volume, so it survives restarts and updates. Notifications only fire on the scheduled run, not on startup or manual checks
 - **Compose stack chip** — containers started by Docker Compose show a small stack name chip on the card, read from the `com.docker.compose.project` label; standalone containers are unaffected
 - **Restart the Compose stack after an update** — opt-in Settings toggle (default off): when you update a Compose-managed container, the other members of the same stack are restarted (not recreated) so they pick up the new container's IP/DNS — no more manual `docker compose restart`. Bulk updates within one stack are debounced to a single round; the updated containers, `_old` backups, docker-updater itself, and any member mid-update are excluded
 - **Self-update** — docker-updater can update its own container: it pulls the new image, then hands off the stop/recreate to a short-lived helper container (spawned from the new image) that does the restart after the old process exits, with no manual intervention required
@@ -107,11 +107,35 @@ Save as `docker-compose.yml`, create a `data/` directory alongside it, then run 
 
 | Environment variable | Default | Description |
 |---|---|---|
-| `CHECK_TIME` | `03:00` | Time of day for the scheduled digest check (HH:MM) |
+| `CHECK_TIME` | `03:00` | **Initial default** for the check schedule — `HH:MM` for a daily check, or a full 5-field cron expression (e.g. `0 3 * * 0` for weekly on Sunday, `0 */6 * * *` for every 6 hours). Once a schedule is set in the **Settings** tab it is saved to the data volume and takes precedence over this variable — see [Check schedule](#check-schedule). |
 | `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check — any [tz database name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *(auto)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications. If not set, a unique private ntfy.sh topic is generated automatically. |
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Secret for verifying GitHub webhook signatures. Required if using the GitHub notifications feature. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker socket path |
+
+---
+
+## Check schedule
+
+How often docker-updater polls the registries is set in the **Settings** tab — no need to edit your compose file or restart the container.
+
+Presets cover the common cases without any cron knowledge:
+
+- **Every 6 hours** / **Every 12 hours**
+- **Daily** — at a time you pick
+- **Weekly** — day of the week + time
+- **Monthly** — day of the month + time
+- **Custom (cron)** — a standard 5-field expression (`minute hour day month weekday`), e.g. `0 3 * * 0` for 3am every Sunday
+
+Changes take effect immediately, and the next scheduled run is shown so you can confirm it applied.
+
+**Where the schedule lives.** A schedule set in Settings is saved to `state.json` on your data volume, so it survives restarts, container recreation, and updates. `CHECK_TIME` is only the *initial default* — it seeds the schedule for a fresh install, and once you save one from the UI, that takes precedence. The startup log reports which is in force:
+
+```
+[scheduler] Check scheduled: '30 4 * * 0' (from settings) Australia/Melbourne (next run: 2026-07-20T04:30:00+10:00)
+```
+
+If a schedule is somehow unparsable it falls back to the 03:00 daily default rather than stopping the container from starting, and an invalid cron entered in Settings is rejected without disturbing the current schedule.
 
 ---
 

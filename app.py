@@ -24,11 +24,12 @@ import apprise
 import docker
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.12.3"
+APP_VERSION          = "1.13.0"
 DATA_DIR             = "/app/data"
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
@@ -1807,12 +1808,26 @@ def api_settings_get():
         "backup_hours":   state.get("backup_hours", 24),
         "restart_stack":  state.get("restart_stack", False),
         "cleanup_images": state.get("cleanup_images", False),
+        "check_schedule": state.get("check_schedule") or _default_schedule_from_env(),
+        "schedule_source": "settings" if state.get("check_schedule") else "env",
+        "check_time_env": CHECK_TIME.strip(),
+        "next_check":     _next_check_time(),
     })
 
 
 @app.route("/api/settings", methods=["POST"])
 def api_settings_post():
     data = request.get_json() or {}
+    if "check_schedule" in data:
+        # Reject a bad schedule up front rather than silently falling back to
+        # the 03:00 default and leaving the user wondering why it didn't stick.
+        cron = _schedule_to_cron(data["check_schedule"])
+        if not cron:
+            return jsonify({"error": "Invalid schedule."}), 400
+        try:
+            CronTrigger.from_crontab(cron, timezone=TIMEZONE)
+        except Exception as e:
+            return jsonify({"error": f"Invalid cron expression '{cron}': {e}"}), 400
     with _state_lock:
         state = load_state()
         if "backup_enabled" in data:
@@ -1823,8 +1838,12 @@ def api_settings_post():
             state["restart_stack"] = bool(data["restart_stack"])
         if "cleanup_images" in data:
             state["cleanup_images"] = bool(data["cleanup_images"])
+        if "check_schedule" in data:
+            state["check_schedule"] = data["check_schedule"]
         save_state(state)
-    return jsonify({"ok": True})
+    if "check_schedule" in data:
+        _reschedule_check()  # outside the lock — _build_check_trigger takes it too
+    return jsonify({"ok": True, "next_check": _next_check_time()})
 
 
 def _client_for_host(host_id: str):
@@ -2162,6 +2181,85 @@ def api_hosts_test(host_id):
 _scheduler: BackgroundScheduler | None = None
 
 
+def _schedule_to_cron(sched: dict | None) -> str | None:
+    """Turn a saved UI schedule into a cron expression (issue #14)."""
+    preset = (sched or {}).get("preset")
+    if not preset:
+        return None
+    if preset == "custom":
+        return ((sched.get("cron") or "").strip()) or None
+    try:
+        hh, mm = map(int, (sched.get("time") or "03:00").split(":"))
+    except Exception:
+        hh, mm = 3, 0
+    if preset == "6h":
+        return f"{mm} */6 * * *"
+    if preset == "12h":
+        return f"{mm} */12 * * *"
+    if preset == "daily":
+        return f"{mm} {hh} * * *"
+    if preset == "weekly":
+        return f"{mm} {hh} * * {sched.get('day_of_week', '0')}"
+    if preset == "monthly":
+        return f"{mm} {hh} {sched.get('day_of_month', '1')} * *"
+    return None
+
+
+def _default_schedule_from_env() -> dict:
+    """Seed the UI schedule from CHECK_TIME, so a fresh install (or one that has
+    never touched Settings) behaves exactly as its env var says."""
+    base = {"preset": "daily", "time": "03:00", "day_of_week": "0",
+            "day_of_month": "1", "cron": ""}
+    spec = CHECK_TIME.strip()
+    if len(spec.split()) == 5:
+        base.update(preset="custom", cron=spec)
+    elif re.match(r"^\d{1,2}:\d{2}$", spec):
+        base["time"] = spec
+    return base
+
+
+def _active_check_spec() -> tuple[str, str]:
+    """The schedule actually in force, and where it came from. A schedule saved
+    from Settings lives in state.json (so it survives restarts, recreation and
+    updates) and takes precedence; CHECK_TIME is only the initial default."""
+    with _state_lock:
+        sched = load_state().get("check_schedule")
+    cron = _schedule_to_cron(sched)
+    if cron:
+        return cron, "settings"
+    return CHECK_TIME.strip(), "env"
+
+
+def _build_check_trigger() -> CronTrigger:
+    """Build the scheduler trigger (issue #14). Accepts either "HH:MM" for a
+    plain daily check, or a full 5-field cron expression (e.g. "0 3 * * 0" for
+    weekly). Falls back to 03:00 daily if unparsable, so a bad value can't stop
+    the container from starting."""
+    spec, source = _active_check_spec()
+    try:
+        if len(spec.split()) == 5:
+            return CronTrigger.from_crontab(spec, timezone=TIMEZONE)
+        hour, minute = map(int, spec.split(":"))
+        return CronTrigger(hour=hour, minute=minute, timezone=TIMEZONE)
+    except Exception as e:
+        print(f"[scheduler] Invalid check schedule '{spec}' (from {source}): {e} "
+              f"— falling back to 03:00 daily")
+        return CronTrigger(hour=3, minute=0, timezone=TIMEZONE)
+
+
+def _reschedule_check() -> None:
+    """Apply a schedule change to the running scheduler — no restart needed.
+    Must be called outside _state_lock: _build_check_trigger takes it too, and
+    threading.Lock is not reentrant."""
+    if _scheduler is None:
+        return
+    try:
+        _scheduler.reschedule_job("update_check", trigger=_build_check_trigger())
+        print(f"[scheduler] Rescheduled — next run: {_next_check_time()}")
+    except Exception as e:
+        print(f"[scheduler] Could not reschedule: {e}")
+
+
 def _next_check_time() -> str | None:
     if _scheduler is None:
         return None
@@ -2272,16 +2370,16 @@ if __name__ == "__main__":
         _run_self_update_helper()
         sys.exit(0)
 
-    check_hour, check_minute = map(int, CHECK_TIME.split(":"))
-
     _scheduler = BackgroundScheduler(daemon=True, timezone=TIMEZONE)
     _scheduler.add_job(
-        check_for_updates, "cron",
-        hour=check_hour, minute=check_minute,
-        timezone=TIMEZONE, kwargs={"notify": True},
+        check_for_updates, _build_check_trigger(),
+        id="update_check", replace_existing=True,
+        kwargs={"notify": True},
     )
     _scheduler.start()
-    print(f"[scheduler] Daily check scheduled at {CHECK_TIME} {TIMEZONE}")
+    _spec, _source = _active_check_spec()
+    print(f"[scheduler] Check scheduled: '{_spec}' (from {_source}) {TIMEZONE} "
+          f"(next run: {_next_check_time()})")
 
     notify_info = get_notify_info()
     if notify_info:

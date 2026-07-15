@@ -367,15 +367,60 @@
     } catch (e) {}
   }
 
+  function collectSchedule() {
+    const preset = document.getElementById('sched-preset')?.value;
+    if (!preset) return null;
+    return {
+      preset,
+      time:         document.getElementById('sched-time')?.value || '03:00',
+      day_of_week:  document.getElementById('sched-dow')?.value  || '0',
+      day_of_month: document.getElementById('sched-dom')?.value  || '1',
+      cron:         document.getElementById('sched-cron')?.value?.trim() || '',
+    };
+  }
+
+  function onSchedulePresetChange() {
+    applyScheduleVisibility();
+    saveSettings();
+  }
+
+  function applyScheduleVisibility() {
+    const preset = document.getElementById('sched-preset')?.value;
+    if (!preset) return;
+    const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+    const usesTime = ['daily', 'weekly', 'monthly'].includes(preset);
+    show('sched-time', usesTime);
+    show('sched-at-label', usesTime);
+    show('sched-dow', preset === 'weekly');
+    show('sched-dom', preset === 'monthly');
+    show('sched-cron-row', preset === 'custom');
+  }
+
+  function renderNextCheck(next) {
+    const el = document.getElementById('sched-next');
+    if (!el) return;
+    el.textContent = next ? `Next check: ${new Date(next).toLocaleString()}` : '';
+  }
+
   async function saveSettings() {
     const enabled = document.getElementById('backup-enabled').checked;
     const hours   = parseInt(document.getElementById('backup-hours').value);
     const restartStack   = document.getElementById('restart-stack')?.checked || false;
     const cleanupImages  = document.getElementById('cleanup-images')?.checked || false;
-    _settings = { backup_enabled: enabled, backup_hours: hours,
+    const schedule = collectSchedule();
+    _settings = { ..._settings, backup_enabled: enabled, backup_hours: hours,
                   restart_stack: restartStack, cleanup_images: cleanupImages };
-    await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+    if (schedule) _settings.check_schedule = schedule;
+    const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(_settings) });
+    const d = await r.json().catch(() => ({}));
+    const el = document.getElementById('sched-next');
+    if (!r.ok) {
+      if (el) { el.style.color = 'var(--red)'; el.textContent = `⚠️ ${d.error || 'Could not save schedule.'}`; }
+    } else {
+      if (el) el.style.color = '';
+      renderNextCheck(d.next_check);
+    }
     document.getElementById('backup-options').style.display = enabled ? '' : 'none';
   }
 
@@ -407,8 +452,46 @@
 
   function renderSettingsPanel() {
     const panel = document.getElementById('settings-panel');
+    const s = _settings.check_schedule || { preset:'daily', time:'03:00', day_of_week:'0', day_of_month:'1', cron:'' };
+    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     panel.innerHTML = `
-      <div class="section-title" style="margin-top:0">Update Behaviour</div>
+      <div class="section-title" style="margin-top:0">Check Schedule</div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">How often to check for updates</div>
+            <div class="setting-desc">Saved here and kept across restarts and updates. The <code>CHECK_TIME</code> environment variable only sets the initial default — once you choose a schedule here, this is what applies.</div>
+          </div>
+        </div>
+        <div class="backup-options" style="flex-direction:column;align-items:stretch;gap:10px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <select id="sched-preset" onchange="onSchedulePresetChange()">
+              <option value="6h"      ${s.preset==='6h'      ? 'selected':''}>Every 6 hours</option>
+              <option value="12h"     ${s.preset==='12h'     ? 'selected':''}>Every 12 hours</option>
+              <option value="daily"   ${s.preset==='daily'   ? 'selected':''}>Daily</option>
+              <option value="weekly"  ${s.preset==='weekly'  ? 'selected':''}>Weekly</option>
+              <option value="monthly" ${s.preset==='monthly' ? 'selected':''}>Monthly</option>
+              <option value="custom"  ${s.preset==='custom'  ? 'selected':''}>Custom (cron)</option>
+            </select>
+            <span id="sched-at-label" class="setting-note">at</span>
+            <input type="time" id="sched-time" value="${esc(s.time || '03:00')}" onchange="saveSettings()"
+                   style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;color:var(--text);font-family:inherit">
+            <select id="sched-dow" onchange="saveSettings()">
+              ${days.map((d,i)=>`<option value="${i}" ${String(s.day_of_week)===String(i)?'selected':''}>${d}</option>`).join('')}
+            </select>
+            <select id="sched-dom" onchange="saveSettings()">
+              ${Array.from({length:28},(_,i)=>i+1).map(d=>`<option value="${d}" ${String(s.day_of_month)===String(d)?'selected':''}>day ${d}</option>`).join('')}
+            </select>
+          </div>
+          <div id="sched-cron-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <input type="text" id="sched-cron" value="${esc(s.cron || '')}" placeholder="0 3 * * 0" onchange="saveSettings()"
+                   style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;color:var(--text);font-family:monospace;min-width:160px">
+            <span class="setting-note">Standard 5-field cron — minute hour day month weekday</span>
+          </div>
+          <div id="sched-next" class="setting-note"></div>
+        </div>
+      </div>
+      <div class="section-title">Update Behaviour</div>
       <div class="settings-card">
         <div class="setting-row">
           <div>
@@ -463,6 +546,8 @@
           <div id="prune-result" style="margin-top:8px;font-size:13px"></div>
         </div>
       </div>`;
+    applyScheduleVisibility();
+    renderNextCheck(_settings.next_check);
   }
 
   let _danglingImages = [];
