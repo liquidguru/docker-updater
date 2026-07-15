@@ -10,7 +10,7 @@ All notable changes to docker-updater are documented here.
 - **`CHECK_TIME` also accepts a cron expression** — previously `HH:MM` only. Plain `HH:MM` still works unchanged, so existing setups need no config change
 
 ### Changed
-- **Schedule now persists in `state.json`** — a schedule chosen in Settings is stored on the data volume and survives restarts, recreation, and updates. `CHECK_TIME` becomes the *initial default* for a fresh install: once a schedule is saved from the UI, that takes precedence. The startup log now reports the active schedule, where it came from (`settings` or `env`), and the next run time, so there's no ambiguity if the two ever disagree
+- **Schedule now persists in `state.json`** — a schedule chosen in Settings is stored on the data volume and survives container restarts, recreation, and docker-updater updating itself to a new image. `CHECK_TIME` becomes the *initial default* for a fresh install: once a schedule is saved from the UI, that takes precedence. The startup log now reports the active schedule, where it came from (`settings` or `env`), and the next run time, so there's no ambiguity if the two ever disagree
 
 ### Fixed
 - An unparsable schedule now falls back to the 03:00 daily default instead of preventing startup; an invalid cron submitted from Settings is rejected with a clear error and leaves the existing schedule untouched
