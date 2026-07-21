@@ -6,6 +6,7 @@ Supports multiple Docker hosts via SSH or TCP.
 
 import base64
 import datetime
+from datetime import timedelta
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="paramiko")
 import hashlib
@@ -19,22 +20,67 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 import apprise
 import docker
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 app = Flask(__name__)
 
-APP_VERSION          = "1.13.0"
+
+def _load_or_create_secret_key() -> str:
+    """Prefer FLASK_SECRET_KEY; otherwise persist a generated key in DATA_DIR."""
+    env_key = os.environ.get("FLASK_SECRET_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    path = os.path.join(DATA_DIR, ".secret_key")
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                existing = f.read().strip()
+            if existing:
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+                return existing
+    except OSError as e:
+        # Local development may not be allowed to create /app/data. Flask can
+        # still run with an ephemeral key, but sessions will reset on restart.
+        print(f"[auth] WARNING: could not read persistent secret key: {e}")
+
+    key = secrets.token_hex(32)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(key)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError as e:
+        print(f"[auth] WARNING: could not persist secret key; using an ephemeral key: {e}")
+    return key
+
+
+# DATA_DIR is defined below; secret key applied after constants.
+
+APP_VERSION          = "1.14.0"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
 DEFAULT_THEME        = "github"
 DATA_DIR             = "/app/data"
+app.secret_key = _load_or_create_secret_key()
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
 STATE_FILE           = os.path.join(DATA_DIR, "state.json")
 HOSTS_FILE           = os.path.join(DATA_DIR, "hosts.json")
 HOSTS_STATE_DIR      = os.path.join(DATA_DIR, "hosts")
@@ -43,6 +89,21 @@ CHECK_TIME            = os.environ.get("CHECK_TIME", "03:00")
 TIMEZONE              = os.environ.get("TIMEZONE", "Australia/Melbourne")
 NOTIFY_URL            = os.environ.get("NOTIFY_URL", "").strip()
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+
+# Optional dashboard auth. Both must be set (non-empty) to enable login.
+_AUTH_USER_RAW = os.environ.get("AUTH_USERNAME", "").strip()
+_AUTH_PASS_RAW = os.environ.get("AUTH_PASSWORD", "").strip()
+if bool(_AUTH_USER_RAW) ^ bool(_AUTH_PASS_RAW):
+    print("[auth] WARNING: set both AUTH_USERNAME and AUTH_PASSWORD to enable login; "
+          "ignoring partial configuration.")
+    AUTH_USERNAME = ""
+    AUTH_PASSWORD = ""
+    AUTH_ENABLED = False
+else:
+    AUTH_USERNAME = _AUTH_USER_RAW
+    AUTH_PASSWORD = _AUTH_PASS_RAW
+    AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+
 
 _state_lock    = threading.Lock()
 _check_lock    = threading.Lock()
@@ -643,9 +704,62 @@ def send_notification(title: str, body: str) -> None:
         a = apprise.Apprise()
         a.add(url)
         a.notify(title=title, body=body)
-        print(f"[notify] Sent: {title}")
+        print(f"[notify] Sent: {title!r}")
     except Exception as e:
         print(f"[notify] Failed: {e}")
+
+
+
+# ── UI language (notifications) ─────────────────────────────────────────────
+
+_I18N_MESSAGES: dict | None = None
+
+
+def _load_i18n_messages() -> dict:
+    global _I18N_MESSAGES
+    if _I18N_MESSAGES is not None:
+        return _I18N_MESSAGES
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "i18n_messages.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            _I18N_MESSAGES = json.load(f)
+    except Exception as e:
+        print(f"[i18n] Could not load messages: {e}")
+        _I18N_MESSAGES = {"en": {}, "zh-CN": {}}
+    return _I18N_MESSAGES
+
+
+def get_ui_lang() -> str:
+    """Language for server-side strings (push notifications)."""
+    with _state_lock:
+        state = load_state()
+    lang = state.get("ui_language") or state.get("client_lang") or "en"
+    if isinstance(lang, str) and lang.lower().startswith("zh"):
+        return "zh-CN"
+    return "en"
+
+
+def ui_t(key: str, **kwargs) -> str:
+    msgs = _load_i18n_messages()
+    lang = get_ui_lang()
+    pack = msgs.get(lang) or msgs.get("en") or {}
+    s = pack.get(key) or (msgs.get("en") or {}).get(key) or key
+    if kwargs:
+        try:
+            for k, v in kwargs.items():
+                s = s.replace("{" + k + "}", str(v))
+        except Exception:
+            pass
+    return s
+
+
+def _const_eq(a: str, b: str) -> bool:
+    """Length-safe constant-time string compare."""
+    ab, bb = a.encode("utf-8"), b.encode("utf-8")
+    if len(ab) != len(bb):
+        hmac.compare_digest(ab, ab)
+        return False
+    return hmac.compare_digest(ab, bb)
 
 
 # ── Registry helpers ──────────────────────────────────────────────────────────
@@ -873,7 +987,7 @@ def check_for_updates(notify: bool = False) -> None:
     print(f"[checker] Starting digest check (notify={notify})...")
 
     # Collect all updates for notification: list of (host_label, container_name)
-    all_updates: list[tuple[str, str]] = []
+    all_updates: list[tuple[str | None, str]] = []
 
     try:
         # ── Local host (existing behaviour, completely unchanged) ─────────────
@@ -886,7 +1000,7 @@ def check_for_updates(notify: bool = False) -> None:
                 state["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
                 save_state(state)
             updates = [n for n, v in local_available.items() if v["has_update"]]
-            all_updates.extend([("Local", n) for n in updates])
+            all_updates.extend([(None, n) for n in updates])
             print(f"[checker:local] Done — {len(updates)} update(s).")
         except Exception as e:
             print(f"[checker:local] Fatal: {e}")
@@ -922,7 +1036,8 @@ def check_for_updates(notify: bool = False) -> None:
             # Group by host label for a clean notification body
             by_host: dict[str, list[str]] = {}
             for host_label, cname in all_updates:
-                by_host.setdefault(host_label, []).append(cname)
+                display_label = ui_t("notify.local_host") if host_label is None else host_label
+                by_host.setdefault(display_label, []).append(cname)
 
             if len(by_host) == 1:
                 body = ", ".join(sorted(next(iter(by_host.values()))))
@@ -932,7 +1047,7 @@ def check_for_updates(notify: bool = False) -> None:
                     for hl, names in by_host.items()
                 )
             send_notification(
-                title=f"Docker: {count} update{'s' if count != 1 else ''} available",
+                title=(ui_t("notify.updates_title_plural", count=count) if count != 1 else ui_t("notify.updates_title", count=count)),
                 body=body,
             )
 
@@ -1486,57 +1601,141 @@ def webhook_github():
     event   = request.headers.get("X-GitHub-Event", "")
     payload = request.get_json(silent=True) or {}
     repo    = payload.get("repository", {}).get("full_name", "unknown")
+    sender  = payload.get("sender", {}).get("login", "someone")
     title   = body = None
 
     if event == "issues":
         action = payload.get("action", "")
         issue  = payload.get("issue", {})
         if action == "opened":
-            title = f"🐛 New issue — {repo}"
-            body  = f"#{issue.get('number')}: {issue.get('title')}\nOpened by {payload.get('sender',{}).get('login','someone')}\n{issue.get('html_url','')}"
+            title = ui_t("webhook.issue_opened_title", repo=repo)
+            body  = (f"#{issue.get('number')}: {issue.get('title')}\n"
+                     f"{ui_t('webhook.opened_by', user=sender)}\n"
+                     f"{issue.get('html_url','')}")
         elif action == "closed":
-            title = f"✅ Issue closed — {repo}"
+            title = ui_t("webhook.issue_closed_title", repo=repo)
             body  = f"#{issue.get('number')}: {issue.get('title')}"
     elif event == "pull_request":
         action = payload.get("action", "")
         pr     = payload.get("pull_request", {})
         if action == "opened":
-            title = f"🔀 New PR — {repo}"
-            body  = f"#{pr.get('number')}: {pr.get('title')}\nOpened by {payload.get('sender',{}).get('login','someone')}\n{pr.get('html_url','')}"
+            title = ui_t("webhook.pr_opened_title", repo=repo)
+            body  = (f"#{pr.get('number')}: {pr.get('title')}\n"
+                     f"{ui_t('webhook.opened_by', user=sender)}\n"
+                     f"{pr.get('html_url','')}")
         elif action == "closed" and pr.get("merged"):
-            title = f"✅ PR merged — {repo}"
+            title = ui_t("webhook.pr_merged_title", repo=repo)
             body  = f"#{pr.get('number')}: {pr.get('title')}"
     elif event == "watch":
         if payload.get("action") == "started":
-            title = f"⭐ New star — {repo}"
-            body  = f"{payload.get('sender',{}).get('login','someone')} starred ({payload.get('repository',{}).get('stargazers_count','?')} total)"
+            count = payload.get("repository", {}).get("stargazers_count", "?")
+            title = ui_t("webhook.star_title", repo=repo)
+            body  = ui_t("webhook.starred", user=sender, count=count)
     elif event == "push":
         branch = payload.get("ref", "").replace("refs/heads/", "")
         if branch in ("main", "master"):
             commits = payload.get("commits", [])
-            title   = f"📦 Push to {branch} — {repo}"
-            body    = f"{payload.get('pusher',{}).get('name','someone')} pushed {len(commits)} commit{'s' if len(commits)!=1 else ''}"
+            pusher = payload.get("pusher", {}).get("name", "someone")
+            title = ui_t("webhook.push_title", branch=branch, repo=repo)
+            body = (ui_t("webhook.pushed_one", user=pusher) if len(commits) == 1
+                    else ui_t("webhook.pushed_many", user=pusher, count=len(commits)))
             if commits:
                 body += f"\n↳ {commits[-1].get('message','').splitlines()[0]}"
     elif event == "release":
         if payload.get("action") == "published":
             rel   = payload.get("release", {})
-            title = f"🚀 New release — {repo}"
+            title = ui_t("webhook.release_title", repo=repo)
             body  = f"{rel.get('tag_name','')}: {rel.get('name','')}\n{rel.get('html_url','')}"
     elif event == "issue_comment":
         if payload.get("action") == "created":
             issue   = payload.get("issue", {})
             comment = payload.get("comment", {})
-            title   = f"💬 Comment — {repo}"
-            body    = f"#{issue.get('number')}: {issue.get('title')}\n{payload.get('sender',{}).get('login','someone')}: {comment.get('body','')[:120]}"
+            title   = ui_t("webhook.comment_title", repo=repo)
+            body    = (f"#{issue.get('number')}: {issue.get('title')}\n"
+                       f"{ui_t('webhook.commented_by', user=sender)} {comment.get('body','')[:120]}")
 
     if title and body:
-        print(f"[github] {event} → {title}")
+        # repr() keeps Windows consoles with a legacy code page from failing
+        # solely because a notification title contains emoji.
+        print(f"[github] {event} -> {title!r}")
         send_notification(title, body)
     return jsonify({"ok": True})
 
 
 # ── Flask routes ──────────────────────────────────────────────────────────────
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+def _theme_from_state() -> str:
+    with _state_lock:
+        theme = load_state().get("theme", DEFAULT_THEME)
+    if theme not in THEMES:
+        theme = DEFAULT_THEME
+    return theme
+
+
+@app.before_request
+def _require_auth():
+    if not AUTH_ENABLED:
+        return None
+    endpoint = request.endpoint or ""
+    path = request.path or ""
+    if endpoint in ("login", "logout", "static", "webhook_github"):
+        return None
+    if path.startswith("/static/"):
+        return None
+    if session.get("authenticated"):
+        return None
+    if path.startswith("/api/"):
+        return jsonify({"error": "Unauthorized"}), 401
+    return redirect(url_for("login", next=request.path))
+
+
+def _safe_next_path(value: str | None) -> str:
+    """Return a local absolute path, or the dashboard for unsafe redirects."""
+    fallback = url_for("index")
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return fallback
+    if "\\" in value or any(ord(char) < 32 for char in value):
+        return fallback
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return fallback
+    return value
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not AUTH_ENABLED:
+        return redirect(url_for("index"))
+    if session.get("authenticated"):
+        return redirect(url_for("index"))
+    error = False
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if _const_eq(username, AUTH_USERNAME) and _const_eq(password, AUTH_PASSWORD):
+            session.clear()
+            session.permanent = True
+            session["authenticated"] = True
+            return redirect(_safe_next_path(request.args.get("next")))
+        error = True
+    return render_template(
+        "login.html",
+        version=APP_VERSION,
+        theme=_theme_from_state(),
+        error=error,
+    )
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    if not AUTH_ENABLED:
+        return redirect(url_for("index"))
+    return redirect(url_for("login"))
+
 
 @app.route("/")
 def index():
@@ -1544,7 +1743,7 @@ def index():
         theme = load_state().get("theme", DEFAULT_THEME)
     if theme not in THEMES:
         theme = DEFAULT_THEME
-    return render_template("index.html", version=APP_VERSION, theme=theme)
+    return render_template("index.html", version=APP_VERSION, theme=theme, auth_enabled=AUTH_ENABLED)
 
 
 @app.route("/api/status")
@@ -1823,6 +2022,9 @@ def api_settings_get():
         "schedule_source": "settings" if state.get("check_schedule") else "env",
         "check_time_env": CHECK_TIME.strip(),
         "next_check":     _next_check_time(),
+        "ui_language":    state.get("ui_language"),
+        "client_lang":    state.get("client_lang"),
+        "auth_enabled":   AUTH_ENABLED,
     })
 
 
@@ -1853,6 +2055,18 @@ def api_settings_post():
             state["theme"] = data["theme"]
         if "check_schedule" in data:
             state["check_schedule"] = data["check_schedule"]
+        # Language: ui_language is a manual override (en/zh-CN); null clears it.
+        # client_lang is a passive browser hint used when ui_language is unset.
+        if "ui_language" in data:
+            val = data.get("ui_language")
+            if val in (None, "", "auto"):
+                state.pop("ui_language", None)
+            elif val in ("en", "zh-CN"):
+                state["ui_language"] = val
+        if "client_lang" in data:
+            cl = data.get("client_lang")
+            if cl in ("en", "zh-CN"):
+                state["client_lang"] = cl
         save_state(state)
     if "check_schedule" in data:
         _reschedule_check()  # outside the lock — _build_check_trigger takes it too
@@ -2401,6 +2615,11 @@ if __name__ == "__main__":
 
     if GITHUB_WEBHOOK_SECRET:
         print(f"[github] Webhook endpoint active at /webhook/github")
+    if AUTH_ENABLED:
+        print(f"[auth] Login required (user={AUTH_USERNAME!r})")
+    else:
+        print("[auth] Open access (set AUTH_USERNAME and AUTH_PASSWORD to enable login)")
+
 
     remote_hosts = load_hosts()
     if remote_hosts:

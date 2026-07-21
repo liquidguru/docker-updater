@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docker Updater</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<script src="/static/i18n.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root, [data-theme="github"] {
+    --bg: #0d1117; --surface: #161b22; --surface2: #21262d;
+    --border: #30363d; --text: #e6edf3; --muted: #7d8590;
+    --green: #3fb950; --orange: #d29922; --blue: #58a6ff;
+    --red: #f85149; --purple: #bc8cff;
+  }
+  [data-theme="midnight"] {
+    --bg: #070b14; --surface: #0e1526; --surface2: #172136;
+    --border: #24314d; --text: #e3e9f5; --muted: #7a88a8;
+    --green: #3fd07f; --orange: #e8a33d; --blue: #5b9dff;
+    --red: #ff6b63; --purple: #b98cff;
+  }
+  [data-theme="nord"] {
+    --bg: #2e3440; --surface: #3b4252; --surface2: #434c5e;
+    --border: #4c566a; --text: #eceff4; --muted: #9aa5b8;
+    --green: #a3be8c; --orange: #ebcb8b; --blue: #88c0d0;
+    --red: #bf616a; --purple: #b48ead;
+  }
+  [data-theme="dracula"] {
+    --bg: #21222c; --surface: #282a36; --surface2: #343746;
+    --border: #44475a; --text: #f8f8f2; --muted: #8f92a8;
+    --green: #50fa7b; --orange: #ffb86c; --blue: #8be9fd;
+    --red: #ff5555; --purple: #bd93f9;
+  }
+  [data-theme="carbon"] {
+    --bg: #131313; --surface: #1c1c1c; --surface2: #272727;
+    --border: #3a3a3a; --text: #ededed; --muted: #8a8a8a;
+    --green: #4bb865; --orange: #d99e2b; --blue: #6ba7e8;
+    --red: #e5534b; --purple: #a986e0;
+  }
+  [data-theme="light"] {
+    --bg: #ffffff; --surface: #f6f8fa; --surface2: #eaeef2;
+    --border: #d0d7de; --text: #1f2328; --muted: #656d76;
+    --green: #1a7f37; --orange: #9a6700; --blue: #0969da;
+    --red: #cf222e; --purple: #8250df;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: min(400px, 100%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 24px 22px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  input {
+    width: 100%; padding: 9px 12px; margin-bottom: 14px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface2); color: var(--text); font-size: 14px; font-family: inherit;
+  }
+  input:focus { outline: none; border-color: var(--blue); }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  button {
+    width: 100%; margin-top: 6px; padding: 10px 14px;
+    border: none; border-radius: 8px; background: #238636; color: #fff;
+    font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  button:hover { filter: brightness(1.1); }
+  .error {
+    background: color-mix(in srgb, var(--red) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+    color: var(--red); border-radius: 8px; padding: 10px 12px;
+    font-size: 13px; margin-bottom: 14px;
+  }
+  .ver { margin-top: 16px; text-align: center; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1 data-i18n="login.title">Sign in</h1>
+    <div class="sub" data-i18n="login.subtitle">docker-updater</div>
+    {% if error %}
+    <div class="error" id="login-error" role="alert" aria-live="polite" data-i18n="login.error">Invalid username or password.</div>
+    {% endif %}
+    <form method="post" action="{{ url_for('login', next=request.args.get('next', '')) }}">
+      <label for="username" data-i18n="login.user">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" required autofocus{% if error %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
+      <label for="password" data-i18n="login.pass">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required{% if error %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
+      <button type="submit" data-i18n="login.submit">Sign in</button>
+    </form>
+    <div class="ver">v{{ version }}</div>
+  </div>
+  <script>
+    I18N.applyI18n();
+    document.documentElement.lang = I18N.currentLang === 'zh-CN' ? 'zh-CN' : 'en';
+  </script>
+</body>
+</html>

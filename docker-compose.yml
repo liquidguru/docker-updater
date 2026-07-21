@@ -1,8 +1,11 @@
 services:
   docker-updater:
-    # For production use, replace 'build: .' with:
+    # For production use, replace this build block with:
     # image: ghcr.io/liquidguru/docker-updater:latest
-    build: .
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     container_name: docker-updater
     restart: unless-stopped
     ports:
@@ -19,3 +22,8 @@ services:
       - TIMEZONE=Australia/Melbourne
       - NOTIFY_URL=    # optional: ntfy://ntfy.sh/your-topic or any Apprise URL
       - DOCKER_HOST=unix:///var/run/docker.sock
+      # Optional login: set both values in .env (blank keeps open access).
+      - AUTH_USERNAME=${AUTH_USERNAME:-}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-}
+      # Optional; auto-generated under /app/data when blank.
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-}

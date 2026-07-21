@@ -1,5 +1,7 @@
 # docker-updater
 
+**English** | [简体中文](README.zh-CN.md)
+
 A lightweight self-hosted web UI for managing Docker container updates — a manual-approval alternative to Watchtower.
 
 Instead of automatically pulling and restarting containers the moment a new image is published, docker-updater polls your registries on a schedule, shows you what's available, and lets you decide when (or whether) to update each container. Updates are performed with a built-in rollback safety net — the old container is kept and can be automatically restored if the new one fails to start. For additional peace of mind, you can optionally retain a backup of the previous container after a *successful* update too — so you can roll back even when a new version comes up cleanly but later turns out to have problems. You can also view release changelogs from GitHub before committing to an update.
@@ -13,6 +15,36 @@ Instead of automatically pulling and restarting containers the moment a new imag
 ![Settings tab — backup retention toggle and window](screenshot-settings.jpeg)
 
 ![Hosts tab — local and remote Docker host management](screenshot-hosts.jpeg)
+
+
+## Authentication
+
+The dashboard remains open by default for backward compatibility. On public or untrusted networks, set **both** credentials; setting only one logs a warning and leaves authentication disabled.
+
+| Variable | Description |
+|----------|-------------|
+| `AUTH_USERNAME` | Dashboard username |
+| `AUTH_PASSWORD` | Dashboard password |
+| `FLASK_SECRET_KEY` | Optional session-signing key; otherwise generated at `/app/data/.secret_key` |
+
+Create an ignored `.env` file next to `docker-compose.yml`, then recreate the container:
+
+```dotenv
+AUTH_USERNAME=admin
+AUTH_PASSWORD=replace-with-a-strong-password
+# FLASK_SECRET_KEY=replace-with-a-long-random-value
+```
+
+Sessions last **7 days**. `/webhook/github` remains reachable without a login and still relies on `GITHUB_WEBHOOK_SECRET`. Put the WebUI behind HTTPS when exposing it publicly.
+
+## Language
+
+The WebUI supports **English** and **简体中文**:
+
+- **Auto (default)** follows the browser language (`zh*` → Chinese; all others → English).
+- **Settings → Appearance → Language** switches immediately between Auto, English, and 中文.
+- Manual choices persist in the browser and control push-notification wording; Auto synchronizes the effective browser language to the server.
+- Docker log streams, image names, and raw Docker errors remain unchanged.
 
 ## Features
 
@@ -111,6 +143,9 @@ Save as `docker-compose.yml`, create a `data/` directory alongside it, then run 
 | `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check — any [tz database name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *(auto)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications. If not set, a unique private ntfy.sh topic is generated automatically. |
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Secret for verifying GitHub webhook signatures. Required if using the GitHub notifications feature. |
+| `AUTH_USERNAME` | *(empty)* | Dashboard login name; authentication requires this and `AUTH_PASSWORD`. |
+| `AUTH_PASSWORD` | *(empty)* | Dashboard password; never stored in `state.json`. |
+| `FLASK_SECRET_KEY` | *(generated)* | Optional session-signing key; persisted as `/app/data/.secret_key` when omitted. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker socket path |
 
 ---
