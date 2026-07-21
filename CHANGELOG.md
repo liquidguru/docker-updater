@@ -2,6 +2,17 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.14.0] — 2026-07-21
+
+### Added
+- **Bilingual documentation** — added a complete Simplified Chinese README with reciprocal language links and synchronized setup, authentication, language, and deployment guidance
+- **Chinese / English UI** — localized dashboard, settings, cards, dialogs, login, and empty states. Auto follows the browser; Settings → Language can force English or 中文. The effective language also controls scheduled and GitHub push-notification wording
+- **Custom dialogs** — replaced browser `alert`/`confirm` with theme-aware, keyboard-accessible project modals
+- **Optional login** — set `AUTH_USERNAME` and `AUTH_PASSWORD` to require sign-in with a 7-day session; open access remains the default when both are unset
+
+### Fixed
+- **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
+
 ## [1.13.0] — 2026-07-15
 
 ### Added

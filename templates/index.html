@@ -66,6 +66,9 @@
 
   button { cursor:pointer; font-family:inherit; font-size:13px; border:none; border-radius:6px; padding:5px 14px; transition:opacity .15s,filter .15s; }
   button:hover { filter:brightness(1.15); }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+    outline:2px solid var(--blue); outline-offset:2px;
+  }
   button:disabled { opacity:.45; cursor:default; filter:none; }
   .btn-primary   { background:#238636; color:#fff; }
   .btn-secondary { background:transparent; border:1px solid var(--border); color:var(--text); }
@@ -153,6 +156,7 @@
   .add-host-form { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; display:flex; flex-direction:column; gap:10px; }
   .add-host-form input { background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:7px 12px; font-size:13px; color:var(--text); font-family:inherit; width:100%; }
   .add-host-form input:focus { outline:none; border-color:var(--blue); }
+  .add-host-form input:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   .add-host-form label { font-size:12px; color:var(--muted); margin-bottom:2px; display:block; }
   .form-row { display:flex; gap:10px; }
   .form-row > div { flex:1; }
@@ -241,44 +245,47 @@
 
 <header>
   <div class="header-row">
-    <h1>🐳 Docker Updater <a class="app-version" href="https://github.com/liquidguru/docker-updater/blob/main/CHANGELOG.md" target="_blank" rel="noopener" title="View changelog">v{{ version }}</a></h1>
+    <h1>🐳 Docker Updater <a class="app-version" href="https://github.com/liquidguru/docker-updater/blob/main/CHANGELOG.md" target="_blank" rel="noopener" data-i18n-title="app.view_changelog" title="View changelog">v{{ version }}</a></h1>
     <div class="header-stats" id="header-stats"></div>
     <div class="header-right">
       <span class="last-check" id="last-check-label">—</span>
-      <button class="btn-check" id="check-btn" onclick="triggerCheck()">Check Now</button>
+      <button class="btn-check" id="check-btn" onclick="triggerCheck()" data-i18n="btn.check_now">Check Now</button>
+      <form id="logout-form" method="post" action="/logout" style="display:{{ '' if auth_enabled else 'none' }};margin:0">
+        <button type="submit" class="btn-secondary btn-sm" data-i18n="btn.logout">Log out</button>
+      </form>
     </div>
   </div>
 </header>
 
 <div class="tabs">
-  <button class="tab active" data-tab="update"   onclick="switchTab('update')">Updates <span class="badge" id="tab-count-update">0</span></button>
-  <button class="tab"        data-tab="deferred" onclick="switchTab('deferred')">Deferred <span class="badge" id="tab-count-deferred">0</span></button>
-  <button class="tab"        data-tab="backups"  onclick="switchTab('backups')">Backups <span class="badge" id="tab-count-backups">0</span></button>
-  <button class="tab"        data-tab="ok"       onclick="switchTab('ok')">Up to Date <span class="badge" id="tab-count-ok">0</span></button>
-  <button class="tab"        data-tab="unknown"  onclick="switchTab('unknown')">Unchecked <span class="badge" id="tab-count-unknown">0</span></button>
-  <button class="tab"        data-tab="all"      onclick="switchTab('all')">All <span class="badge" id="tab-count-all">0</span></button>
-  <button class="tab"        data-tab="hosts"    onclick="switchTab('hosts')">Hosts <span class="badge" id="tab-count-hosts">0</span></button>
-  <button class="tab"        data-tab="settings" onclick="switchTab('settings')">Settings</button>
+  <button class="tab active" data-tab="update"   onclick="switchTab('update')"><span data-i18n="tab.updates">Updates</span> <span class="badge" id="tab-count-update">0</span></button>
+  <button class="tab"        data-tab="deferred" onclick="switchTab('deferred')"><span data-i18n="tab.deferred">Deferred</span> <span class="badge" id="tab-count-deferred">0</span></button>
+  <button class="tab"        data-tab="backups"  onclick="switchTab('backups')"><span data-i18n="tab.backups">Backups</span> <span class="badge" id="tab-count-backups">0</span></button>
+  <button class="tab"        data-tab="ok"       onclick="switchTab('ok')"><span data-i18n="tab.up_to_date">Up to Date</span> <span class="badge" id="tab-count-ok">0</span></button>
+  <button class="tab"        data-tab="unknown"  onclick="switchTab('unknown')"><span data-i18n="tab.unchecked">Unchecked</span> <span class="badge" id="tab-count-unknown">0</span></button>
+  <button class="tab"        data-tab="all"      onclick="switchTab('all')"><span data-i18n="tab.all">All</span> <span class="badge" id="tab-count-all">0</span></button>
+  <button class="tab"        data-tab="hosts"    onclick="switchTab('hosts')"><span data-i18n="tab.hosts">Hosts</span> <span class="badge" id="tab-count-hosts">0</span></button>
+  <button class="tab"        data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Settings</button>
 </div>
 
 <main>
-  <div id="checking-banner"><span class="spinner"></span> Checking for updates…</div>
+  <div id="checking-banner"><span class="spinner"></span> <span data-i18n="banner.checking">Checking for updates…</span></div>
 
   <div id="notify-banner">
-    <span>📱 <strong>Subscribe for push notifications:</strong></span>
+    <span>📱 <strong data-i18n="banner.notify_prefix">Subscribe for push notifications:</strong></span>
     <code id="notify-topic" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:2px 10px;font-family:monospace;font-size:12px;color:var(--text)"></code>
-    <button class="btn-secondary btn-sm" onclick="copyNotifyTopic(event)">Copy</button>
-    <span style="color:var(--muted);font-size:12px">Open ntfy app → Subscribe to topic → paste above</span>
-    <button class="btn-ghost btn-sm" onclick="dismissNotifyBanner()" style="margin-left:auto">✕</button>
+    <button class="btn-secondary btn-sm" onclick="copyNotifyTopic(event)" data-i18n="btn.copy">Copy</button>
+    <span style="color:var(--muted);font-size:12px"><span data-i18n="banner.notify_hint">Open ntfy app → Subscribe to topic → paste above</span></span>
+    <button class="btn-ghost btn-sm" onclick="dismissNotifyBanner()" style="margin-left:auto" data-i18n-title="btn.dismiss" data-i18n-aria-label="btn.dismiss" aria-label="Dismiss">✕</button>
   </div>
 
   <div id="select-toolbar" class="select-toolbar hidden">
     <input type="checkbox" id="select-all-cb" onchange="toggleSelectAll(this.checked)">
-    <label for="select-all-cb">Select all</label>
+    <label for="select-all-cb" data-i18n="btn.select_all">Select all</label>
     <span class="select-divider"></span>
-    <span id="select-count" style="color:var(--muted);font-size:12px">0 selected</span>
+    <span id="select-count" style="color:var(--muted);font-size:12px" data-i18n="select.none_selected">0 selected</span>
     <div style="flex:1"></div>
-    <button class="btn-primary btn-sm" id="update-selected-btn" onclick="updateSelected()" disabled>Update Selected (0)</button>
+    <button class="btn-primary btn-sm" id="update-selected-btn" onclick="updateSelected()" disabled data-i18n="btn.update_selected_none">Update Selected (0)</button>
   </div>
 
   <div id="container-list" class="container-list"></div>
@@ -287,7 +294,7 @@
   <div id="backups-panel" style="display:none"></div>
   <div id="settings-panel" style="display:none"></div>
 
-  <div class="section-title" id="history-title">Recent Updates</div>
+  <div class="section-title" id="history-title" data-i18n="history.title">Recent Updates</div>
   <div id="history-list" class="history-list"></div>
 </main>
 
@@ -295,13 +302,13 @@
 <div class="modal-overlay" id="log-modal-overlay" onclick="closeLogModal(event)">
   <div class="modal">
     <div class="modal-header">
-      <h3 id="log-modal-title">Update log</h3>
-      <button class="btn-ghost" onclick="closeLogModal()">✕</button>
+      <h3 id="log-modal-title" data-i18n="modal.update_log">Update log</h3>
+      <button class="btn-ghost" onclick="closeLogModal()" data-i18n-title="btn.close_dialog" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
     </div>
     <div class="modal-body"><div class="log-output" id="log-output"></div></div>
     <div class="modal-footer">
       <span id="log-status-text" style="color:var(--muted);font-size:12px;margin-right:auto"></span>
-      <button class="btn-secondary btn-sm" onclick="closeLogModal()">Close</button>
+      <button class="btn-secondary btn-sm" onclick="closeLogModal()" data-i18n="btn.close">Close</button>
     </div>
   </div>
 </div>
@@ -310,17 +317,17 @@
 <div class="modal-overlay" id="defer-modal-overlay" onclick="closeDeferModal(event)">
   <div class="modal" style="width:min(360px,95vw)">
     <div class="modal-header">
-      <h3 id="defer-modal-title">Defer update</h3>
-      <button class="btn-ghost" onclick="closeDeferModal()">✕</button>
+      <h3 id="defer-modal-title" data-i18n="modal.defer_title">Defer update</h3>
+      <button class="btn-ghost" onclick="closeDeferModal()" data-i18n-title="btn.close_dialog" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
     </div>
     <div class="modal-body" style="padding:16px">
-      <p style="color:var(--muted);font-size:13px;margin-bottom:14px">Skip this update for:</p>
+      <p style="color:var(--muted);font-size:13px;margin-bottom:14px"><span data-i18n="modal.defer_skip">Skip this update for:</span></p>
       <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="btn-secondary" onclick="submitDefer(7)">7 days</button>
-        <button class="btn-secondary" onclick="submitDefer(14)">14 days</button>
-        <button class="btn-secondary" onclick="submitDefer(30)">30 days</button>
-        <button class="btn-secondary" onclick="submitDefer(90)">90 days</button>
-        <button class="btn-secondary" onclick="submitDefer(3650)" style="color:var(--muted)">Indefinitely</button>
+        <button class="btn-secondary" onclick="submitDefer(7)" data-i18n="modal.defer_7">7 days</button>
+        <button class="btn-secondary" onclick="submitDefer(14)" data-i18n="modal.defer_14">14 days</button>
+        <button class="btn-secondary" onclick="submitDefer(30)" data-i18n="modal.defer_30">30 days</button>
+        <button class="btn-secondary" onclick="submitDefer(90)" data-i18n="modal.defer_90">90 days</button>
+        <button class="btn-secondary" onclick="submitDefer(3650)" style="color:var(--muted)" data-i18n="modal.defer_indef">Indefinitely</button>
       </div>
     </div>
   </div>
@@ -330,15 +337,15 @@
 <div class="modal-overlay" id="ctr-log-overlay" onclick="closeCtrLogs(event)">
   <div class="modal" style="width:min(800px,95vw)">
     <div class="modal-header">
-      <h3 id="ctr-log-title">Container Logs</h3>
+      <h3 id="ctr-log-title" data-i18n="modal.ctr_logs">Container Logs</h3>
       <span id="ctr-log-pill" style="font-size:12px;padding:2px 8px;border-radius:12px;border:1px solid currentColor;margin-left:12px;flex-shrink:0"></span>
-      <button class="btn-ghost" onclick="closeCtrLogs()" style="margin-left:auto">✕</button>
+      <button class="btn-ghost" onclick="closeCtrLogs()" style="margin-left:auto" data-i18n-title="btn.close_dialog" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
     </div>
     <div class="modal-body"><div class="log-output" id="ctr-log-output" style="max-height:520px;overflow-y:auto"></div></div>
     <div class="modal-footer">
       <span id="ctr-log-meta" style="color:var(--muted);font-size:12px;margin-right:auto"></span>
-      <button class="btn-secondary btn-sm" onclick="refreshCtrLogs()">↻ Refresh</button>
-      <button class="btn-secondary btn-sm" onclick="closeCtrLogs()">Close</button>
+      <button class="btn-secondary btn-sm" onclick="refreshCtrLogs()" data-i18n="btn.refresh">↻ Refresh</button>
+      <button class="btn-secondary btn-sm" onclick="closeCtrLogs()" data-i18n="btn.close">Close</button>
     </div>
   </div>
 </div>
@@ -347,21 +354,21 @@
 <div class="modal-overlay" id="changelog-src-overlay" onclick="closeChangelogSrc(event)">
   <div class="modal" style="width:min(480px,95vw)">
     <div class="modal-header">
-      <h3 id="changelog-src-title">Set changelog source</h3>
-      <button class="btn-ghost" onclick="closeChangelogSrc()">✕</button>
+      <h3 id="changelog-src-title" data-i18n="modal.changelog_src_title">Set changelog source</h3>
+      <button class="btn-ghost" onclick="closeChangelogSrc()" data-i18n-title="btn.close_dialog" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
     </div>
     <div class="modal-body" style="padding:20px 20px 8px">
-      <p style="color:var(--muted);font-size:13px;margin:0 0 14px">Paste the GitHub repository URL — docker-updater will fetch releases from it whenever you click <em>What's new?</em></p>
-      <p id="changelog-src-hint" style="color:var(--muted);font-size:12px;margin:0 0 10px;display:none">⚑ Guessed from image name — verify before saving.</p>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 14px"><span data-i18n="modal.changelog_src_desc">Paste the GitHub repository URL — docker-updater will fetch releases from it whenever you click <em>What's new?</em></span></p>
+      <p id="changelog-src-hint" style="color:var(--muted);font-size:12px;margin:0 0 10px;display:none" data-i18n="modal.changelog_src_hint">⚑ Guessed from image name — verify before saving.</p>
       <input id="changelog-src-input" type="url" placeholder="https://github.com/owner/repo"
         style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg,var(--bg));color:var(--fg);font-size:14px"
         onkeydown="if(event.key==='Enter')saveChangelogSource()">
       <p id="changelog-src-err" style="color:var(--red);font-size:12px;margin:8px 0 0;display:none"></p>
     </div>
     <div class="modal-footer">
-      <button class="btn-secondary btn-sm" id="changelog-src-clear-btn" onclick="clearChangelogSource()" style="margin-right:auto">Clear</button>
-      <button class="btn-secondary btn-sm" onclick="closeChangelogSrc()">Cancel</button>
-      <button class="btn-primary btn-sm" onclick="saveChangelogSource()">Save</button>
+      <button class="btn-secondary btn-sm" id="changelog-src-clear-btn" onclick="clearChangelogSource()" style="margin-right:auto" data-i18n="btn.clear">Clear</button>
+      <button class="btn-secondary btn-sm" onclick="closeChangelogSrc()" data-i18n="btn.cancel">Cancel</button>
+      <button class="btn-primary btn-sm" onclick="saveChangelogSource()" data-i18n="btn.save">Save</button>
     </div>
   </div>
 </div>
@@ -369,18 +376,19 @@
 <div class="modal-overlay" id="changelog-modal-overlay" onclick="closeChangelogModal(event)">
   <div class="modal" style="width:min(760px,95vw)">
     <div class="modal-header">
-      <h3 id="changelog-modal-title">What's new</h3>
-      <a id="changelog-github-link" class="changelog-github-link" href="#" target="_blank" rel="noopener" style="display:none">View on GitHub ↗</a>
-      <button class="btn-ghost" onclick="closeChangelogModal()" style="margin-left:8px">✕</button>
+      <h3 id="changelog-modal-title" data-i18n="modal.whats_new">What's new</h3>
+      <a id="changelog-github-link" class="changelog-github-link" href="#" target="_blank" rel="noopener" style="display:none"><span data-i18n="modal.view_github">View on GitHub ↗</span></a>
+      <button class="btn-ghost" onclick="closeChangelogModal()" style="margin-left:8px" data-i18n-title="btn.close_dialog" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
     </div>
     <div class="modal-body"><div id="changelog-content" class="changelog-body"></div></div>
     <div class="modal-footer">
-      <button class="btn-secondary btn-sm" onclick="closeChangelogModal()">Close</button>
-      <button class="btn-primary btn-sm" id="changelog-update-btn" onclick="changelogUpdate()">Update Now</button>
+      <button class="btn-secondary btn-sm" onclick="closeChangelogModal()" data-i18n="btn.close">Close</button>
+      <button class="btn-primary btn-sm" id="changelog-update-btn" onclick="changelogUpdate()" data-i18n="btn.update_now">Update Now</button>
     </div>
   </div>
 </div>
 
+<script src="/static/i18n.js"></script>
 <script>
   let allContainers = [];
   let allHosts = [];
@@ -446,7 +454,7 @@
   function renderNextCheck(next) {
     const el = document.getElementById('sched-next');
     if (!el) return;
-    el.textContent = next ? `Next check: ${new Date(next).toLocaleString()}` : '';
+    el.textContent = next ? t('settings.next_check', {when: new Date(next).toLocaleString(uiLocale())}) : '';
   }
 
   async function saveSettings() {
@@ -458,12 +466,15 @@
     _settings = { ..._settings, backup_enabled: enabled, backup_hours: hours,
                   restart_stack: restartStack, cleanup_images: cleanupImages };
     if (schedule) _settings.check_schedule = schedule;
+    const payload = { backup_enabled: enabled, backup_hours: hours,
+      restart_stack: restartStack, cleanup_images: cleanupImages };
+    if (schedule) payload.check_schedule = schedule;
     const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(_settings) });
+      body: JSON.stringify(payload) });
     const d = await r.json().catch(() => ({}));
     const el = document.getElementById('sched-next');
     if (!r.ok) {
-      if (el) { el.style.color = 'var(--red)'; el.textContent = `⚠️ ${d.error || 'Could not save schedule.'}`; }
+      if (el) { el.style.color = 'var(--red)'; el.textContent = '⚠️ ' + (d.error || t('settings.save_sched_err')); }
     } else {
       if (el) el.style.color = '';
       renderNextCheck(d.next_check);
@@ -475,12 +486,12 @@
     const panel = document.getElementById('backups-panel');
     const backed = allContainers.filter(c => c.has_rollback);
     if (!backed.length) {
-      panel.innerHTML = `<div class="empty"><span class="emoji">💾</span><strong>No backups</strong><p style="margin-top:6px">Enable backup retention in Settings, then backups will appear here after each update.</p></div>`;
+      panel.innerHTML = `<div class="empty"><span class="emoji">💾</span><strong>${t("empty.backups_title")}</strong><p style="margin-top:6px">${t("empty.backups_desc")}</p></div>`;
       return;
     }
     panel.innerHTML = backed.map(c => {
-      const exp = c.rollback_expires ? `expires ${timeUntil(c.rollback_expires)}` : '';
-      const hostChip = multiHost ? `<span class="host-chip">${esc(c.host_name)}</span>` : '';
+      const exp = c.rollback_expires ? t('card.expires', {when: timeUntil(c.rollback_expires)}) : '';
+      const hostChip = multiHost ? `<span class="host-chip">${esc(c.host_id === 'local' ? t('hosts.local') : c.host_name)}</span>` : '';
       return `<div class="container-card status-ok" style="border-left-color:var(--purple)">
         <div class="card-info">
           <div class="card-name">${esc(c.name)}</div>
@@ -488,10 +499,10 @@
           <div class="card-meta">${exp}${hostChip ? `<span>·</span>${hostChip}` : ''}</div>
         </div>
         <div class="card-actions">
-          <span class="badge-rollback">↩ backup</span>
-          <button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">Rollback</button>
-          <button class="btn-danger btn-sm" onclick="confirmDeleteBackup('${esc(c.name)}','${esc(c.host_id)}')">Delete backup</button>
-          <button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">Logs</button>
+          <span class="badge-rollback">${t("badge.backup")}</span>
+          <button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.rollback')}</button>
+          <button class="btn-danger btn-sm" onclick="confirmDeleteBackup('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.delete_backup')}</button>
+          <button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.logs')}</button>
         </div>
       </div>`;
     }).join('');
@@ -500,65 +511,79 @@
   function renderSettingsPanel() {
     const panel = document.getElementById('settings-panel');
     const s = _settings.check_schedule || { preset:'daily', time:'03:00', day_of_week:'0', day_of_month:'1', cron:'' };
-    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const themeNames = { github:'GitHub Dark', midnight:'Midnight', nord:'Nord',
-                         dracula:'Dracula', carbon:'Carbon', light:'Light' };
+    const days = [t('day.sun'),t('day.mon'),t('day.tue'),t('day.wed'),t('day.thu'),t('day.fri'),t('day.sat')];
+    const themeNames = {
+      github: t('theme.github'), midnight: t('theme.midnight'), nord: t('theme.nord'),
+      dracula: t('theme.dracula'), carbon: t('theme.carbon'), light: t('theme.light')
+    };
     const themes = _settings.themes || Object.keys(themeNames);
+    const langMode = I18N.getLangMode();
     panel.innerHTML = `
-      <div class="section-title" style="margin-top:0">Appearance</div>
+      <div class="section-title" style="margin-top:0">${t('settings.appearance')}</div>
       <div class="settings-card">
         <div class="setting-row">
           <div>
-            <div class="setting-label">Theme</div>
-            <div class="setting-desc">Changes the dashboard's colours. Status colours keep their meaning — green is always good, red is always a problem.</div>
+            <div class="setting-label">${t('settings.theme')}</div>
+            <div class="setting-desc">${t('settings.theme_desc')}</div>
           </div>
           <select id="theme-select" onchange="onThemeChange(this.value)">
-            ${themes.map(t => `<option value="${esc(t)}" ${_settings.theme===t?'selected':''}>${esc(themeNames[t] || t)}</option>`).join('')}
+            ${themes.map(th => `<option value="${esc(th)}" ${_settings.theme===th?'selected':''}>${esc(themeNames[th] || th)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="setting-row" style="margin-top:14px">
+          <div>
+            <div class="setting-label">${t('settings.language')}</div>
+            <div class="setting-desc">${t('settings.language_desc')}</div>
+          </div>
+          <select id="lang-select" onchange="onLanguageChange(this.value)">
+            <option value="auto" ${langMode==='auto'?'selected':''}>${t('settings.lang_auto')}</option>
+            <option value="en" ${langMode==='en'?'selected':''}>${t('settings.lang_en')}</option>
+            <option value="zh-CN" ${langMode==='zh-CN'?'selected':''}>${t('settings.lang_zh')}</option>
           </select>
         </div>
       </div>
-      <div class="section-title">Check Schedule</div>
+      <div class="section-title">${t('settings.schedule')}</div>
       <div class="settings-card">
         <div class="setting-row">
           <div>
-            <div class="setting-label">How often to check for updates</div>
-            <div class="setting-desc">Saved here and kept across restarts and updates. The <code>CHECK_TIME</code> environment variable only sets the initial default — once you choose a schedule here, this is what applies.</div>
+            <div class="setting-label">${t('settings.schedule_label')}</div>
+            <div class="setting-desc">${t('settings.schedule_desc')}</div>
           </div>
         </div>
         <div class="backup-options" style="flex-direction:column;align-items:stretch;gap:10px">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <select id="sched-preset" onchange="onSchedulePresetChange()">
-              <option value="6h"      ${s.preset==='6h'      ? 'selected':''}>Every 6 hours</option>
-              <option value="12h"     ${s.preset==='12h'     ? 'selected':''}>Every 12 hours</option>
-              <option value="daily"   ${s.preset==='daily'   ? 'selected':''}>Daily</option>
-              <option value="weekly"  ${s.preset==='weekly'  ? 'selected':''}>Weekly</option>
-              <option value="monthly" ${s.preset==='monthly' ? 'selected':''}>Monthly</option>
-              <option value="custom"  ${s.preset==='custom'  ? 'selected':''}>Custom (cron)</option>
+              <option value="6h"      ${s.preset==='6h'      ? 'selected':''}>${t('settings.every_6h')}</option>
+              <option value="12h"     ${s.preset==='12h'     ? 'selected':''}>${t('settings.every_12h')}</option>
+              <option value="daily"   ${s.preset==='daily'   ? 'selected':''}>${t('settings.daily')}</option>
+              <option value="weekly"  ${s.preset==='weekly'  ? 'selected':''}>${t('settings.weekly')}</option>
+              <option value="monthly" ${s.preset==='monthly' ? 'selected':''}>${t('settings.monthly')}</option>
+              <option value="custom"  ${s.preset==='custom'  ? 'selected':''}>${t('settings.custom_cron')}</option>
             </select>
-            <span id="sched-at-label" class="setting-note">at</span>
+            <span id="sched-at-label" class="setting-note">${t('settings.at')}</span>
             <input type="time" id="sched-time" value="${esc(s.time || '03:00')}" onchange="saveSettings()"
                    style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;color:var(--text);font-family:inherit">
             <select id="sched-dow" onchange="saveSettings()">
               ${days.map((d,i)=>`<option value="${i}" ${String(s.day_of_week)===String(i)?'selected':''}>${d}</option>`).join('')}
             </select>
             <select id="sched-dom" onchange="saveSettings()">
-              ${Array.from({length:28},(_,i)=>i+1).map(d=>`<option value="${d}" ${String(s.day_of_month)===String(d)?'selected':''}>day ${d}</option>`).join('')}
+              ${Array.from({length:28},(_,i)=>i+1).map(d=>`<option value="${d}" ${String(s.day_of_month)===String(d)?'selected':''}>${t('settings.day_n',{n:d})}</option>`).join('')}
             </select>
           </div>
           <div id="sched-cron-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <input type="text" id="sched-cron" value="${esc(s.cron || '')}" placeholder="0 3 * * 0" onchange="saveSettings()"
                    style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;color:var(--text);font-family:monospace;min-width:160px">
-            <span class="setting-note">Standard 5-field cron — minute hour day month weekday</span>
+            <span class="setting-note">${t('settings.cron_hint')}</span>
           </div>
           <div id="sched-next" class="setting-note"></div>
         </div>
       </div>
-      <div class="section-title">Update Behaviour</div>
+      <div class="section-title">${t('settings.behaviour')}</div>
       <div class="settings-card">
         <div class="setting-row">
           <div>
-            <div class="setting-label">Keep backup after successful update</div>
-            <div class="setting-desc">The previous container is kept stopped after an update and can be restored if the new version causes problems.</div>
+            <div class="setting-label">${t('settings.backup_label')}</div>
+            <div class="setting-desc">${t('settings.backup_desc')}</div>
           </div>
           <label class="toggle">
             <input type="checkbox" id="backup-enabled" ${_settings.backup_enabled ? 'checked' : ''} onchange="saveSettings()">
@@ -566,21 +591,21 @@
           </label>
         </div>
         <div class="backup-options" id="backup-options" style="display:${_settings.backup_enabled ? '' : 'none'}">
-          <label style="font-size:12px;color:var(--muted)">Keep backup for</label>
+          <label style="font-size:12px;color:var(--muted)">${t('settings.keep_for')}</label>
           <select id="backup-hours" onchange="saveSettings()">
-            <option value="1"   ${_settings.backup_hours==1   ? 'selected' : ''}>1 hour</option>
-            <option value="6"   ${_settings.backup_hours==6   ? 'selected' : ''}>6 hours</option>
-            <option value="24"  ${_settings.backup_hours==24  ? 'selected' : ''}>24 hours</option>
-            <option value="168" ${_settings.backup_hours==168 ? 'selected' : ''}>7 days</option>
+            <option value="1"   ${_settings.backup_hours==1   ? 'selected' : ''}>${t('settings.1h')}</option>
+            <option value="6"   ${_settings.backup_hours==6   ? 'selected' : ''}>${t('settings.6h')}</option>
+            <option value="24"  ${_settings.backup_hours==24  ? 'selected' : ''}>${t('settings.24h')}</option>
+            <option value="168" ${_settings.backup_hours==168 ? 'selected' : ''}>${t('settings.7d')}</option>
           </select>
-          <span class="setting-note">Stopped containers temporarily retain their previous image layer until the backup expires.</span>
+          <span class="setting-note">${t('settings.backup_note')}</span>
         </div>
       </div>
       <div class="settings-card">
         <div class="setting-row">
           <div>
-            <div class="setting-label">Restart the rest of the Compose stack after an update</div>
-            <div class="setting-desc">When a container started by Docker Compose is updated, its other stack members are restarted (not recreated) so they pick up the new container's IP. Helps services that cache connections to a sibling. Standalone containers are unaffected.</div>
+            <div class="setting-label">${t('settings.restart_label')}</div>
+            <div class="setting-desc">${t('settings.restart_desc')}</div>
           </div>
           <label class="toggle">
             <input type="checkbox" id="restart-stack" ${_settings.restart_stack ? 'checked' : ''} onchange="saveSettings()">
@@ -591,8 +616,8 @@
       <div class="settings-card">
         <div class="setting-row">
           <div>
-            <div class="setting-label">Remove the old image after an update</div>
-            <div class="setting-desc">After a successful update, the superseded image is deleted to reclaim disk space. While backup retention (above) is on, the old image is kept with the backup and only removed when that backup is deleted or expires — it's never pulled out from under a rollback point.</div>
+            <div class="setting-label">${t('settings.cleanup_label')}</div>
+            <div class="setting-desc">${t('settings.cleanup_desc')}</div>
           </div>
           <label class="toggle">
             <input type="checkbox" id="cleanup-images" ${_settings.cleanup_images ? 'checked' : ''} onchange="saveSettings()">
@@ -601,8 +626,8 @@
         </div>
         <div class="backup-options" style="flex-direction:column;align-items:stretch">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <button class="btn-secondary btn-sm" id="prune-btn" onclick="loadDanglingImages()">Show reclaimable images</button>
-            <span class="setting-note">Lists dangling (untagged) images — pick which to delete, or select all. Only images not used by any container can be removed; named volumes are never touched.</span>
+            <button class="btn-secondary btn-sm" id="prune-btn" onclick="loadDanglingImages()">${t('btn.show_reclaimable')}</button>
+            <span class="setting-note">${t('settings.prune_hint')}</span>
           </div>
           <div id="prune-list" style="width:100%"></div>
           <div id="prune-result" style="margin-top:8px;font-size:13px"></div>
@@ -620,7 +645,7 @@
     const out  = document.getElementById('prune-result');
     out.textContent = '';
     btn.disabled = true;
-    btn.textContent = 'Loading…';
+    btn.textContent = t('prune.loading');
     try {
       const r = await fetch('/api/dangling-images');
       const d = await r.json();
@@ -628,17 +653,17 @@
       _danglingImages = d.images || [];
       renderDanglingList();
     } catch (e) {
-      out.style.color = 'var(--red)'; out.textContent = '⚠️ Could not load images.';
+      out.style.color = 'var(--red)'; out.textContent = t('prune.load_err');
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Refresh list';
+      btn.textContent = t('btn.show_reclaimable');
     }
   }
 
   function renderDanglingList() {
     const list = document.getElementById('prune-list');
     if (!_danglingImages.length) {
-      list.innerHTML = `<div class="setting-note" style="margin-top:8px">No dangling images — nothing to reclaim right now.</div>`;
+      list.innerHTML = `<div class="setting-note" style="margin-top:8px">${t('prune.none')}</div>`;
       return;
     }
     const rowCols = 'grid-template-columns:20px 100px minmax(0,1fr) 72px 64px';
@@ -646,7 +671,7 @@
       <label style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;border-bottom:1px solid var(--border);font-size:13px">
         <input type="checkbox" class="prune-check" value="${esc(img.id)}" data-size="${img.size}" onchange="updatePruneTotal()">
         <code style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(img.short_id)}</code>
-        ${img.repo ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(img.repo)}">${esc(img.repo)}</span>` : `<span class="setting-note">unknown image</span>`}
+        ${img.repo ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(img.repo)}">${esc(img.repo)}</span>` : `<span class="setting-note">${t('prune.unknown_image')}</span>`}
         <span style="text-align:right">${esc(img.size_human)}</span>
         <span class="setting-note" style="text-align:right">${esc(timeAgo(img.created))}</span>
       </label>`).join('');
@@ -654,13 +679,13 @@
       <div style="margin-top:10px;max-height:260px;overflow-y:auto;overflow-x:hidden">
         <label style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;font-size:13px;font-weight:600">
           <input type="checkbox" id="prune-select-all" onchange="toggleAllPrune(this.checked)">
-          <span style="grid-column:2 / span 3">Select all (${_danglingImages.length} image${_danglingImages.length===1?'':'s'})</span>
+          <span style="grid-column:2 / span 3">${t(_danglingImages.length === 1 ? 'prune.select_all_count_one' : 'prune.select_all_count', {n: _danglingImages.length})}</span>
           <span style="text-align:right">${_human_size_js(_danglingImages.reduce((s,i)=>s+i.size,0))}</span>
         </label>
         ${rows}
       </div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
-        <button class="btn-danger btn-sm" id="prune-delete-btn" onclick="deleteSelectedImages()" disabled>Delete selected</button>
+        <button class="btn-danger btn-sm" id="prune-delete-btn" onclick="deleteSelectedImages()" disabled>${t('btn.delete_selected_images')}</button>
         <span id="prune-selected-total" class="setting-note"></span>
       </div>`;
   }
@@ -675,7 +700,7 @@
     const total = checked.reduce((s, cb) => s + Number(cb.dataset.size), 0);
     document.getElementById('prune-delete-btn').disabled = checked.length === 0;
     document.getElementById('prune-selected-total').textContent =
-      checked.length ? `${checked.length} selected — ${_human_size_js(total)}` : '';
+      checked.length ? t('prune.selected_count', {n: checked.length, size: _human_size_js(total)}) : '';
   }
 
   function _human_size_js(n) {
@@ -689,33 +714,33 @@
   async function deleteSelectedImages() {
     const ids = [...document.querySelectorAll('.prune-check:checked')].map(cb => cb.value);
     if (!ids.length) return;
-    if (!confirm(`Delete ${ids.length} image(s)? This cannot be undone.`)) return;
+    if (!(await showConfirm(t('prune.confirm', {n: ids.length})))) return;
     const btn = document.getElementById('prune-delete-btn');
     const out = document.getElementById('prune-result');
     btn.disabled = true;
-    btn.textContent = 'Deleting…';
+    btn.textContent = t('prune.working', {done: 0, total: ids.length});
     out.style.color = 'var(--muted)';
-    out.textContent = `Working — 0/${ids.length}…`;
+    out.textContent = t('prune.working', {done: 0, total: ids.length});
     try {
       const r = await fetch('/api/prune-images', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ids }) });
       const d = await r.json();
       if (!r.ok || !d.job_id) {
-        out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error || 'Could not start deletion.'}`;
+        out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + (d.error || t('prune.start_err'));
         return;
       }
       await pollPruneJob(d.job_id, out);
     } catch (e) {
-      out.style.color = 'var(--red)'; out.textContent = '⚠️ Could not delete images.';
+      out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + t('prune.load_err');
     } finally {
-      btn.textContent = 'Delete selected';
+      btn.textContent = t('btn.delete_selected_images');
       btn.disabled = false;
       await loadDanglingImages();
     }
   }
 
   async function pollPruneJob(jobId, out) {
-    // Runs server-side in a background thread — polled rather than awaited in
+    // Runs server-side in a background thread ? polled rather than awaited in
     // one request, since a large "select all" batch of multi-GB images can
     // easily outlast a reverse proxy's read timeout.
     while (true) {
@@ -725,27 +750,28 @@
         r = await fetch(`/api/prune-images/${jobId}`);
         d = await r.json();
       } catch (e) {
-        continue; // transient network hiccup while polling — keep trying
+        continue; // transient network hiccup while polling ? keep trying
       }
       if (r.status === 404) {
         out.style.color = 'var(--red)';
-        out.textContent = '⚠️ Lost track of the job (server may have restarted) — refresh the list to check results.';
+        out.textContent = t('prune.job_lost');
         return;
       }
       if (!r.ok) {
-        out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error || 'Could not check progress.'}`;
+        out.style.color = 'var(--red)';
+        out.textContent = '⚠️ ' + (d.error || t('prune.progress_err'));
         return;
       }
       if (d.status === 'running') {
         out.style.color = 'var(--muted)';
-        out.textContent = `Working — ${d.done}/${d.total}…`;
+        out.textContent = t('prune.working', {done: d.done, total: d.total});
         continue;
       }
       out.style.color = 'var(--green)';
-      let html = `✅ Freed ${d.freed} across ${d.count} image(s).`;
+      let html = t('prune.freed', {freed: d.freed, count: d.count});
       if (d.skipped && d.skipped.length) {
-        const items = d.skipped.map(s => `<li><code>${esc(s.id)}</code> — ${esc(s.reason)}</li>`).join('');
-        html += `<div style="color:var(--muted);margin-top:6px">${d.skipped.length} skipped:</div>
+        const items = d.skipped.map(s => `<li><code>${esc(s.id)}</code> ? ${esc(s.reason)}</li>`).join('');
+        html += `<div style="color:var(--muted);margin-top:6px">${t('prune.skipped', {n: d.skipped.length})}</div>
           <ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">${items}</ul>`;
       }
       out.innerHTML = html;
@@ -753,19 +779,19 @@
     }
   }
 
-  function confirmRollback(name, hostId = 'local') {
-    if (!confirm(`Roll back "${name}" to its previous version?\n\nThis will stop the current container and restore the backup.`)) return;
+  async function confirmRollback(name, hostId = 'local') {
+    if (!(await showConfirm(t('confirm.rollback', {name})))) return;
     startRollback(name, hostId);
   }
 
   async function startRollback(name, hostId = 'local') {
     const r = await fetch(`/api/rollback/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, { method:'POST' });
-    if (!r.ok) { alert('Could not start rollback — another operation may be in progress.'); return; }
-    openLogModal(name, hostId, 'Rollback log');
+    if (!r.ok) { await showAlert(t('alert.rollback_busy')); return; }
+    openLogModal(name, hostId, t('modal.rollback_log'));
   }
 
-  function confirmDeleteBackup(name, hostId = 'local') {
-    if (!confirm('Delete the backup for "' + name + '"? You will no longer be able to roll back to the previous version.')) return;
+  async function confirmDeleteBackup(name, hostId = 'local') {
+    if (!(await showConfirm(t('confirm.delete_backup', {name})))) return;
     deleteBackup(name, hostId);
   }
 
@@ -775,11 +801,11 @@
       const r = await fetch(url, { method:'DELETE' });
       if (!r.ok) {
         const d = await r.json().catch(function(){ return {}; });
-        alert(d.error || 'Could not delete backup.');
+        await showAlert(d.error || t('alert.delete_backup_fail'));
         return;
       }
     } catch (e) {
-      alert('Could not delete backup.');
+      await showAlert(t('alert.delete_backup_fail'));
       return;
     }
     fetchStatus();
@@ -876,11 +902,11 @@
     const visible = tab === 'all' ? containers : containers.filter(c => c.status === tab);
     if (!visible.length) {
       const msgs = {
-        update:   { e:'✅', t:'All up to date',    s:'No updates available.' },
-        deferred: { e:'⏸', t:'Nothing deferred',  s:'No containers are currently deferred.' },
-        ok:       { e:'🎉', t:'All good',           s:'All containers have their latest image.' },
-        unknown:  { e:'🔍', t:'Nothing unchecked', s:'Click Check Now to scan for updates.' },
-        all:      { e:'🐳', t:'No containers',     s:'No registry-tracked containers found.' },
+        update:   { e:'✅', t: t('empty.update_title'),   s: t('empty.update_desc') },
+        deferred: { e:'⏸', t: t('empty.deferred_title'), s: t('empty.deferred_desc') },
+        ok:       { e:'🎉', t: t('empty.ok_title'),       s: t('empty.ok_desc') },
+        unknown:  { e:'🔍', t: t('empty.unknown_title'),  s: t('empty.unknown_desc') },
+        all:      { e:'🐳', t: t('empty.all_title'),      s: t('empty.all_desc') },
       };
       const m = msgs[tab] || msgs.all;
       list.innerHTML = `<div class="empty"><span class="emoji">${m.e}</span><strong>${m.t}</strong><p style="margin-top:6px">${m.s}</p></div>`;
@@ -891,26 +917,26 @@
 
   function cardHTML(c) {
     const statusMap = {
-      update:   '<span class="badge-status badge-update">Update Available</span>',
-      ok:       '<span class="badge-status badge-ok">Up to Date</span>',
-      deferred: `<span class="badge-status badge-deferred">Deferred until ${c.defer_until}</span>`,
-      unknown:  '<span class="badge-status badge-unknown">Not Checked</span>',
+      update:   `<span class="badge-status badge-update">${t('badge.update')}</span>`,
+      ok:       `<span class="badge-status badge-ok">${t('badge.ok')}</span>`,
+      deferred: `<span class="badge-status badge-deferred">${t('badge.deferred', {until: c.defer_until})}</span>`,
+      unknown:  `<span class="badge-status badge-unknown">${t('badge.unknown')}</span>`,
     };
     const isUpdating  = c.updating;
     const statusClass = isUpdating ? 'updating' : `status-${c.status}`;
     const selKey      = `${c.host_id}:${c.name}`;
     const isSelected  = selectedNames.has(selKey);
     const badge = isUpdating
-      ? `<span class="badge-status badge-updating"><span class="spinner"></span> Updating…</span>`
+      ? `<span class="badge-status badge-updating"><span class="spinner"></span> ${t('badge.updating')}</span>`
       : (statusMap[c.status] || '');
-    const checkedAt = c.checked_at ? `Checked ${timeAgo(c.checked_at)}` : 'Not yet checked';
+    const checkedAt = c.checked_at ? t('card.checked', {when: timeAgo(c.checked_at)}) : t('card.not_checked');
 
     // Host chip — only show when multi-host
     const hostChip = multiHost
-      ? `<span class="host-chip">${esc(c.host_name)}</span>`
+      ? `<span class="host-chip">${esc(c.host_id === 'local' ? t('hosts.local') : c.host_name)}</span>`
       : '';
     const composeChip = c.compose_project
-      ? `<span class="compose-chip" title="Docker Compose stack">⬡ ${esc(c.compose_project)}</span>`
+      ? `<span class="compose-chip" title="${t('card.compose_title')}">⬡ ${esc(c.compose_project)}</span>`
       : '';
 
     const showCb = c.status === 'update' && !isUpdating;
@@ -921,34 +947,34 @@
     let whatsNew = '';
     if ((c.status === 'update' || c.status === 'deferred') && !isUpdating) {
       if (c.has_changelog) {
-        whatsNew = `<button class="btn-link" onclick="openChangelog('${esc(c.name)}','${esc(c.host_id)}')">What's new?</button>`;
+        whatsNew = `<button class="btn-link" onclick="openChangelog('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.whats_new')}</button>`;
         if (c.changelog_url) {
-          whatsNew += ` <button class="btn-link" style="opacity:0.5;font-size:11px;padding:0 2px" title="Edit changelog source" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','${esc(c.changelog_url)}')">✎</button>`;
+          whatsNew += ` <button class="btn-link" style="opacity:0.5;font-size:11px;padding:0 2px" title="${t('btn.edit_source')}" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','${esc(c.changelog_url)}')">✎</button>`;
         }
       } else {
-        whatsNew = `<button class="btn-link" style="opacity:0.55;font-size:12px" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','','${esc(c.image)}')">Set changelog source…</button>`;
+        whatsNew = `<button class="btn-link" style="opacity:0.55;font-size:12px" onclick="openSetChangelogSource('${esc(c.name)}','${esc(c.host_id)}','','${esc(c.image)}')">${t('btn.set_changelog')}</button>`;
       }
     }
 
     let actions = '';
     if (isUpdating) {
-      actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">View Log</button>`;
+      actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.log')}</button>`;
     } else {
-      if (c.has_logs) actions += `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">Last Log</button>`;
+      if (c.has_logs) actions += `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.log')}</button>`;
       if (c.has_rollback && !isUpdating) {
-        const exp = c.rollback_expires ? ` · expires ${timeUntil(c.rollback_expires)}` : '';
-        actions += `<span class="badge-rollback">↩ backup${exp}</span><button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">Rollback</button>`;
+        const exp = c.rollback_expires ? ` · ${t('card.expires', {when: timeUntil(c.rollback_expires)})}` : '';
+        actions += `<span class="badge-rollback">${t("badge.backup")}</span><button class="btn-secondary btn-sm" onclick="confirmRollback('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.rollback')}</button>`;
       }
       if (c.status === 'update') {
-        actions += `<button class="btn-primary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">Update</button>
-                    <button class="btn-secondary btn-sm" onclick="openDefer('${esc(c.name)}','${esc(c.host_id)}')">Defer ▾</button>`;
+        actions += `<button class="btn-primary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.update')}</button>
+                    <button class="btn-secondary btn-sm" onclick="openDefer('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.defer')} ▾</button>`;
       } else if (c.status === 'deferred') {
-        actions += `<button class="btn-secondary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">Update Now</button>
-                    <button class="btn-ghost btn-sm" onclick="undefer('${esc(c.name)}','${esc(c.host_id)}')">Remove Defer</button>`;
+        actions += `<button class="btn-secondary btn-sm" onclick="confirmUpdate('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.update_now')}</button>
+                    <button class="btn-ghost btn-sm" onclick="undefer('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.undefer')}</button>`;
       }
     }
 
-    const logsBtn = `<button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">Logs</button>`;
+    const logsBtn = `<button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.logs')}</button>`;
 
     return `<div class="container-card ${statusClass} ${showCb ? 'has-cb' : ''} ${isSelected ? 'selected' : ''}" id="card-${esc(selKey)}">
       ${cbHtml}
@@ -964,18 +990,22 @@
   function renderHeaderStats(containers, lastCheck) {
     const updates  = containers.filter(c => c.status === 'update').length;
     const deferred = containers.filter(c => c.status === 'deferred').length;
-    const total    = containers.length;
+    const ok = containers.filter(c => c.status === 'ok').length;
+    const unknown = containers.filter(c => c.status === 'unknown').length;
     const parts = [];
-    if (updates  > 0) parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--orange)"></span>${updates} update${updates!==1?'s':''}</span>`);
-    if (deferred > 0) parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--blue)"></span>${deferred} deferred</span>`);
-    parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--muted)"></span>${total} tracked</span>`);
+    if (updates  > 0) parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--orange)"></span>${t('stat.updates', {n: updates})}</span>`);
+    if (deferred > 0) parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--blue)"></span>${t('stat.deferred', {n: deferred})}</span>`);
+    if (ok > 0) parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--green)"></span>${t('stat.ok', {n: ok})}</span>`);
+    if (unknown > 0) parts.push(`<span class="stat-chip"><span class="dot" style="background:var(--muted)"></span>${t('stat.unknown', {n: unknown})}</span>`);
     document.getElementById('header-stats').innerHTML = parts.join('');
-    document.getElementById('last-check-label').textContent = lastCheck ? `Checked ${timeAgo(lastCheck)}` : 'Not checked yet';
+    document.getElementById('last-check-label').textContent = lastCheck
+      ? t('last_check', {when: timeAgo(lastCheck)})
+      : t('last_check_never');
   }
 
   function renderHistory(history) {
     const el = document.getElementById('history-list');
-    if (!history.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">No updates recorded yet.</div>'; return; }
+    if (!history.length) { el.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:8px 0">${t('empty.history')}</div>`; return; }
     el.innerHTML = history.map(h => {
       const ok = h.status === 'success';
       const hostLabel = multiHost && h.host_id && h.host_id !== 'local'
@@ -985,8 +1015,8 @@
       const isRunning = !!runningContainer;
       const isUpToDate = isRunning && runningContainer.status === 'ok';
       const runDot = isRunning
-        ? '<span style="color:var(--green);font-size:10px;white-space:nowrap;width:56px;display:inline-block;text-align:right">● running</span>'
-        : '<span style="color:var(--red);font-size:10px;white-space:nowrap;width:56px;display:inline-block;text-align:right">● stopped</span>';
+        ? `<span style="color:var(--green);font-size:10px;white-space:nowrap;width:56px;display:inline-block;text-align:right">● ${t('hist.running')}</span>`
+        : `<span style="color:var(--red);font-size:10px;white-space:nowrap;width:56px;display:inline-block;text-align:right">● ${t('hist.stopped')}</span>`;
       const statusOk  = ok || (isRunning && isUpToDate);
       const icon      = statusOk ? '✅' : (isRunning ? '⚠️' : '❌');
       const iconTitle = (!ok && h.status) ? ` title="${esc(h.status)}"` : '';
@@ -997,7 +1027,7 @@
         <span class="history-image">${esc(h.image === '?' && runningContainer ? runningContainer.image : h.image)}</span>
         ${runDot}
         <span class="history-time">${timeAgo(h.updated_at)}</span>
-        <button class="btn-ghost btn-sm" style="flex-shrink:0;margin-left:4px" onclick="openHistoryLog('${esc(h.container)}','${esc(h.host_id || 'local')}')">Log</button>
+        <button class="btn-ghost btn-sm" style="flex-shrink:0;margin-left:4px" onclick="openHistoryLog('${esc(h.container)}','${esc(h.host_id || 'local')}')">${t('btn.log')}</button>
       </div>`;
     }).join('');
   }
@@ -1021,16 +1051,20 @@
     const hostsHTML = allHosts.map(h => {
       const isLocal  = h.id === 'local';
       const cls      = isLocal ? 'local' : `remote-${h.status || 'unknown'}`;
-      const statusLabel = isLocal ? 'Local socket' : (h.status || 'unknown');
+      const displayName = isLocal ? t('hosts.local') : h.name;
+      const statusLabel = isLocal ? t('hosts.local')
+        : h.status === 'online' ? t('hosts.healthy')
+        : h.status === 'offline' ? t('hosts.unreachable')
+        : t('hosts.unknown');
       const statusCls   = isLocal ? 'online' : (h.status || 'unknown');
-      const lastChk     = h.last_check ? `Last checked ${timeAgo(h.last_check)}` : 'Not yet checked';
+      const lastChk     = h.last_check ? t('card.checked', {when: timeAgo(h.last_check)}) : t('card.not_checked');
       const errorTip    = h.last_error ? `<span style="color:var(--red);font-size:11px;margin-top:2px;display:block" title="${esc(h.last_error)}">⚠ ${esc(h.last_error.substring(0,80))}${h.last_error.length>80?'…':''}</span>` : '';
       const actions = isLocal ? '' : `
-        <button class="btn-secondary btn-sm" onclick="testHost('${esc(h.id)}',this)">Test</button>
-        <button class="btn-danger btn-sm" onclick="removeHost('${esc(h.id)}','${esc(h.name)}')">Remove</button>`;
+        <button class="btn-secondary btn-sm" onclick="testHost('${esc(h.id)}',this)">${t('btn.test')}</button>
+        <button class="btn-danger btn-sm" onclick="removeHost('${esc(h.id)}','${esc(h.name)}')">${t('btn.remove')}</button>`;
       return `<div class="host-card ${cls}">
         <div class="host-info">
-          <div class="host-name">${esc(h.name)}</div>
+          <div class="host-name">${esc(displayName)}</div>
           <div class="host-url">${esc(h.url || '')}</div>
           <div class="host-status-text ${statusCls}">${statusLabel} · ${lastChk}</div>
           ${errorTip}
@@ -1041,22 +1075,22 @@
 
     panel.innerHTML = `
       <div class="host-list">${hostsHTML}</div>
-      <div class="section-title" style="margin-top:28px">Add Remote Host</div>
+      <div class="section-title" style="margin-top:28px">${t('hosts.add_title')}</div>
       <div class="add-host-form">
         <div class="form-row">
           <div>
-            <label>Name</label>
+            <label>${t('hosts.name')}</label>
             <input id="add-host-name" type="text" placeholder="VPS 1" />
           </div>
           <div style="flex:2">
-            <label>Docker URL</label>
-            <input id="add-host-url" type="text" placeholder="ssh://user@1.2.3.4  or  tcp://1.2.3.4:2376" />
+            <label>${t('hosts.url')}</label>
+            <input id="add-host-url" type="text" placeholder="${t('hosts.url_placeholder')}" />
           </div>
         </div>
         <div id="add-host-result"></div>
         <div style="display:flex;gap:8px">
-          <button class="btn-secondary btn-sm" onclick="testNewHost()">Test Connection</button>
-          <button class="btn-primary btn-sm" onclick="addHost()">Add Host</button>
+          <button class="btn-secondary btn-sm" onclick="testNewHost()">${t('btn.test')}</button>
+          <button class="btn-primary btn-sm" onclick="addHost()">${t('btn.add_host')}</button>
         </div>
       </div>`;
 
@@ -1068,20 +1102,20 @@
   }
 
   async function testHost(hostId, btn) {
-    btn.textContent = 'Testing…'; btn.disabled = true;
+    btn.textContent = t('btn.testing'); btn.disabled = true;
     const r = await fetch(`/api/hosts/${encodeURIComponent(hostId)}/test`, {method:'POST'});
     const d = await r.json();
-    btn.textContent = 'Test'; btn.disabled = false;
-    const keyNote = d.accepted_key ? '\n🔑 Host key automatically accepted and saved.' : '';
-    alert(d.ok ? `✅ Connected — Docker ${d.version}, ${d.containers} containers${keyNote}` : `❌ ${d.error}`);
+    btn.textContent = t('btn.test'); btn.disabled = false;
+    const keyNote = d.accepted_key ? ('\n' + t('hosts.key_note')) : '';
+    await showAlert(d.ok ? t('hosts.connected', {version: d.version, n: d.containers, keyNote}) : ('❌ ' + (d.error || t('hosts.test_fail'))));
   }
 
   async function testNewHost() {
     const name = document.getElementById('add-host-name').value.trim();
     const url  = document.getElementById('add-host-url').value.trim();
     const res  = document.getElementById('add-host-result');
-    if (!url) { res.innerHTML = '<div class="test-result error">URL is required.</div>'; return; }
-    res.innerHTML = '<div class="test-result" style="color:var(--muted)">Testing…</div>';
+    if (!url) { res.innerHTML = `<div class="test-result error">${t('hosts.url_required')}</div>`; return; }
+    res.innerHTML = `<div class="test-result" style="color:var(--muted)">${t('btn.testing')}</div>`;
     // temporarily add + test + remove
     const addR = await fetch('/api/hosts', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name: name || 'test', url})});
@@ -1091,8 +1125,8 @@
     const testD = await testR.json();
     await fetch(`/api/hosts/${encodeURIComponent(addD.id)}`, {method:'DELETE'});
     if (testD.ok) {
-      const keyNote = testD.accepted_key ? '<br><small>🔑 Host key automatically accepted and saved.</small>' : '';
-      res.innerHTML = `<div class="test-result ok">✅ Connected — Docker ${testD.version}, ${testD.containers} containers${keyNote}</div>`;
+      const keyNote = testD.accepted_key ? ('<br><small>' + t('hosts.key_note') + '</small>') : '';
+      res.innerHTML = `<div class="test-result ok">${t('hosts.connected', {version: testD.version, n: testD.containers, keyNote})}</div>`;
     } else {
       res.innerHTML = `<div class="test-result error">❌ ${esc(testD.error)}</div>`;
     }
@@ -1102,27 +1136,36 @@
     const name = document.getElementById('add-host-name').value.trim();
     const url  = document.getElementById('add-host-url').value.trim();
     const res  = document.getElementById('add-host-result');
-    if (!name || !url) { res.innerHTML = '<div class="test-result error">Name and URL are required.</div>'; return; }
+    if (!name || !url) { res.innerHTML = `<div class="test-result error">${t('hosts.name_url_required')}</div>`; return; }
     const r = await fetch('/api/hosts', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name, url})});
     const d = await r.json();
     if (d.ok) {
       document.getElementById('add-host-name').value = '';
       document.getElementById('add-host-url').value  = '';
-      res.innerHTML = '<div class="test-result ok">✅ Host added. Running a check now…</div>';
+      res.innerHTML = `<div class="test-result ok">${t('hosts.added')}</div>`;
       fetch('/api/check', {method:'POST'});
       loadSettings();
-  fetchStatus();
+      fetchStatus();
     } else {
       res.innerHTML = `<div class="test-result error">❌ ${esc(d.error)}</div>`;
     }
   }
 
   async function removeHost(hostId, hostName) {
-    if (!confirm(`Remove host "${hostName}"? Its cached state will be deleted.`)) return;
-    await fetch(`/api/hosts/${encodeURIComponent(hostId)}`, {method:'DELETE'});
-    loadSettings();
-  fetchStatus();
+    if (!(await showConfirm(t('hosts.remove_confirm', {name: hostName})))) return;
+    try {
+      const r = await fetch(`/api/hosts/${encodeURIComponent(hostId)}`, {method:'DELETE'});
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        await showAlert(d.error || t('hosts.remove_failed'));
+        return;
+      }
+      loadSettings();
+      fetchStatus();
+    } catch (e) {
+      await showAlert(t('hosts.remove_failed'));
+    }
   }
 
   // ── Selection ─────────────────────────────────────────────────────────────
@@ -1153,9 +1196,9 @@
     if (!visible.length || currentTab === 'hosts') { toolbar.classList.add('hidden'); return; }
     toolbar.classList.remove('hidden');
     const n = selectedNames.size;
-    document.getElementById('select-count').textContent = n === 0 ? '0 selected' : `${n} selected`;
+    document.getElementById('select-count').textContent = t('select.n_selected', {n});
     const btn = document.getElementById('update-selected-btn');
-    btn.textContent = `Update Selected (${n})`;
+    btn.textContent = t('btn.update_selected', {n});
     btn.disabled = n === 0;
     const allChecked  = visible.every(c => selectedNames.has(`${c.host_id}:${c.name}`));
     const someChecked = visible.some(c => selectedNames.has(`${c.host_id}:${c.name}`));
@@ -1168,15 +1211,15 @@
     if (!selectedNames.size) return;
     const keys = [...selectedNames];
     const list = keys.map(k => `  • ${k.split(':').slice(1).join(':')}`).join('\n');
-    if (!confirm(`Update ${keys.length} container${keys.length > 1 ? 's' : ''}?\n\n${list}`)) return;
+    if (!(await showConfirm(t('confirm.update_many', {n: keys.length, list})))) return;
     selectedNames.clear(); updateSelectionUI();
     for (const key of keys) {
       const [hostId, ...rest] = key.split(':');
       const name = rest.join(':');
-      await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
+      await startUpdate(name, hostId, false);
     }
     loadSettings();
-  fetchStatus();
+    fetchStatus();
   }
 
   // ── Update / defer ────────────────────────────────────────────────────────
@@ -1186,25 +1229,38 @@
     document.getElementById('checking-banner').classList.add('visible');
     await fetch('/api/check', {method:'POST'});
     loadSettings();
-  fetchStatus();
+    fetchStatus();
   }
 
-  function confirmUpdate(name, hostId = 'local') {
-    if (!confirm(`Update "${name}"?\n\nThis will pull the latest image and recreate the container.`)) return;
-    startUpdate(name, hostId);
+  async function confirmUpdate(name, hostId = 'local') {
+    if (!(await showConfirm(t('confirm.update_one', {name})))) return;
+    await startUpdate(name, hostId);
   }
 
-  async function startUpdate(name, hostId = 'local') {
+  async function startUpdate(name, hostId = 'local', refresh = true) {
     const selKey = `${hostId}:${name}`;
     selectedNames.delete(selKey);
-    await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
-    loadSettings();
-  fetchStatus();
+    try {
+      const r = await fetch(`/api/update/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        await showAlert(d.error || t('alert.update_busy'));
+        return false;
+      }
+    } catch (e) {
+      await showAlert(t('alert.update_busy'));
+      return false;
+    }
+    if (refresh) {
+      loadSettings();
+      fetchStatus();
+    }
+    return true;
   }
 
   function openDefer(name, hostId = 'local') {
     deferTarget = {name, hostId};
-    document.getElementById('defer-modal-title').textContent = `Defer: ${name}`;
+    document.getElementById('defer-modal-title').textContent = t('modal.defer_named', {name});
     document.getElementById('defer-modal-overlay').classList.add('open');
   }
 
@@ -1225,22 +1281,22 @@
   async function undefer(name, hostId = 'local') {
     await fetch(`/api/undefer/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`, {method:'POST'});
     loadSettings();
-  fetchStatus();
+    fetchStatus();
   }
 
   // ── Changelog ─────────────────────────────────────────────────────────────
 
   async function openChangelog(name, hostId = 'local') {
     changelogTarget = {name, hostId};
-    document.getElementById('changelog-modal-title').textContent = `What's new — ${name}`;
+    document.getElementById('changelog-modal-title').textContent = t('modal.whats_new_named', {name});
     document.getElementById('changelog-github-link').style.display = 'none';
-    document.getElementById('changelog-content').innerHTML = '<div class="changelog-loading"><span class="spinner" style="width:18px;height:18px;border-width:3px"></span><p style="margin-top:10px">Fetching release notes…</p></div>';
+    document.getElementById('changelog-content').innerHTML = `<div class="changelog-loading"><span class="spinner" style="width:18px;height:18px;border-width:3px"></span><p style="margin-top:10px">${t('changelog.fetching')}</p></div>`;
     document.getElementById('changelog-modal-overlay').classList.add('open');
     try {
       const r = await fetch(`/api/changelog/${encodeURIComponent(name)}?host=${encodeURIComponent(hostId)}`);
       renderChangelog(await r.json());
     } catch (e) {
-      document.getElementById('changelog-content').innerHTML = `<div style="padding:16px;color:var(--red)">Failed: ${esc(String(e))}</div>`;
+      document.getElementById('changelog-content').innerHTML = `<div style="padding:16px;color:var(--red)">${t('common.failed', {msg: esc(String(e))})}</div>`;
     }
   }
 
@@ -1252,21 +1308,21 @@
       content.innerHTML = `<div class="changelog-no-source"><p>${esc(data.error)}</p>${data.source_url?`<p style="margin-top:8px"><a href="${esc(data.source_url)}" target="_blank" style="color:var(--blue)">${esc(data.source_url)}</a></p>`:''}</div>`;
       return;
     }
-    if (!data.releases?.length) { content.innerHTML = '<div class="changelog-no-source">No release notes found.</div>'; return; }
+    if (!data.releases?.length) { content.innerHTML = `<div class="changelog-no-source">${t('changelog.no_notes')}</div>`; return; }
     content.innerHTML = data.releases.map(rel => `
       <div class="release">
         <div class="release-header">
           <span class="release-name">${esc(rel.name||rel.tag)}</span>
           <span class="release-tag">${esc(rel.tag)}</span>
-          ${rel.prerelease?'<span class="release-prerelease">pre-release</span>':''}
-          <span class="release-date">${rel.date?new Date(rel.date).toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}):''}</span>
+          ${rel.prerelease?`<span class="release-prerelease">${t('changelog.prerelease')}</span>`:''}
+          <span class="release-date">${rel.date?new Date(rel.date).toLocaleDateString(uiLocale(),{day:'numeric',month:'short',year:'numeric'}):''}</span>
         </div>
         <div class="release-body">${renderMarkdown(rel.body)}</div>
       </div>`).join('');
   }
 
   function renderMarkdown(md) {
-    if (!md) return '<em style="color:var(--muted)">No release notes provided.</em>';
+    if (!md) return `<em style="color:var(--muted)">${t('changelog.no_body')}</em>`;
     return md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/^#{1,3} (.+)$/gm,'<strong>$1</strong>')
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
@@ -1297,7 +1353,7 @@
   function openSetChangelogSource(name, hostId, currentUrl, imageName) {
     _changelogSrcTarget = {name, hostId};
     const prefill = currentUrl || (imageName ? _guessGithubUrl(imageName) : '');
-    document.getElementById('changelog-src-title').textContent = `Set changelog source — ${name}`;
+    document.getElementById('changelog-src-title').textContent = t('modal.changelog_src_named', {name});
     document.getElementById('changelog-src-input').value = prefill;
     const hint = document.getElementById('changelog-src-hint');
     if (hint) hint.style.display = (!currentUrl && prefill) ? '' : 'none';
@@ -1326,9 +1382,9 @@
         body: JSON.stringify({url, host_id: hostId}),
       });
       const data = await r.json();
-      if (!r.ok) { errEl.textContent = data.error || 'Save failed'; errEl.style.display = ''; return; }
+      if (!r.ok) { errEl.textContent = data.error || t('changelog.save_failed'); errEl.style.display = ''; return; }
       closeChangelogSrc();
-      await refreshStatus();
+      await fetchStatus();
     } catch (e) {
       errEl.textContent = String(e); errEl.style.display = '';
     }
@@ -1351,8 +1407,8 @@
   async function openHistoryLog(name, hostId = 'local') {
     logTarget = null;         // disable SSE poll — this is a static fetch
     clearTimeout(logPollTimer);
-    document.getElementById('log-modal-title').textContent = `Update log — ${name}`;
-    document.getElementById('log-output').innerHTML = '<span style="color:var(--muted)">Loading…</span>';
+    document.getElementById('log-modal-title').textContent = t('modal.update_log_named', {name});
+    document.getElementById('log-output').innerHTML = `<span style="color:var(--muted)">${t('common.loading')}</span>`;
     document.getElementById('log-status-text').textContent = '';
     document.getElementById('log-modal-overlay').classList.add('open');
     try {
@@ -1360,7 +1416,7 @@
       const d = await r.json();
       const out = document.getElementById('log-output');
       if (!d.found || !d.logs.length) {
-        out.innerHTML = '<span style="color:var(--muted)">No log on disk yet — logs are saved after the next update.</span>';
+        out.innerHTML = `<span style="color:var(--muted)">${t('logs.no_disk')}</span>`;
         return;
       }
       out.innerHTML = d.logs.map(line => {
@@ -1372,9 +1428,9 @@
       out.scrollTop = out.scrollHeight;
       const last = d.logs[d.logs.length - 1] || '';
       document.getElementById('log-status-text').textContent =
-        last.startsWith('SUCCESS') ? '✅ Complete' : last.startsWith('ERROR') ? '❌ Failed' : '';
+        last.startsWith('SUCCESS') ? t('status.complete') : last.startsWith('ERROR') ? t('status.failed') : '';
     } catch (err) {
-      document.getElementById('log-output').textContent = `Error: ${err.message}`;
+      document.getElementById('log-output').textContent = t('error.generic', {msg: err.message});
     }
   }
 
@@ -1384,9 +1440,9 @@
 
   async function openCtrLogs(name, hostId = 'local') {
     _ctrLogTarget = {name, hostId};
-    document.getElementById('ctr-log-title').textContent = `Logs — ${name}`;
+    document.getElementById('ctr-log-title').textContent = t('modal.logs_named', {name});
     document.getElementById('ctr-log-pill').textContent  = '';
-    document.getElementById('ctr-log-output').textContent = 'Loading…';
+    document.getElementById('ctr-log-output').textContent = t('common.loading');
     document.getElementById('ctr-log-meta').textContent   = '';
     document.getElementById('ctr-log-overlay').classList.add('open');
     await _fetchCtrLogs();
@@ -1394,7 +1450,7 @@
 
   async function refreshCtrLogs() {
     if (!_ctrLogTarget) return;
-    document.getElementById('ctr-log-output').textContent = 'Loading…';
+    document.getElementById('ctr-log-output').textContent = t('common.loading');
     await _fetchCtrLogs();
   }
 
@@ -1404,27 +1460,27 @@
       const r = await fetch(`/api/container/${encodeURIComponent(name)}/logs?host_id=${encodeURIComponent(hostId)}&tail=200`);
       const d = await r.json();
       if (d.error) {
-        document.getElementById('ctr-log-output').textContent = `Error: ${d.error}`;
+        document.getElementById('ctr-log-output').textContent = t('error.generic', {msg: d.error});
         return;
       }
       // Status pill
       const pill = document.getElementById('ctr-log-pill');
       if (d.status === 'running') {
-        pill.textContent = '● running';
+        pill.textContent = `● ${t('status.ctr_running')}`;
         pill.style.color = 'var(--green)';
       } else {
-        const code = (d.exit_code !== null && d.exit_code !== undefined) ? ` (exit ${d.exit_code})` : '';
-        pill.textContent   = `● stopped${code}`;
+        const code = (d.exit_code !== null && d.exit_code !== undefined) ? t('logs.exit_code', {code: d.exit_code}) : '';
+        pill.textContent   = `● ${t('status.ctr_stopped')}${code}`;
         pill.style.color   = d.exit_code === 0 ? 'var(--muted)' : 'var(--red)';
       }
       // Output — scroll to bottom so the newest lines are visible
       const out = document.getElementById('ctr-log-output');
-      out.textContent = d.logs || '(no output)';
+      out.textContent = d.logs || t('logs.no_output');
       out.scrollTop   = out.scrollHeight;
       document.getElementById('ctr-log-meta').textContent =
-        `Last 200 lines · refreshed ${new Date().toLocaleTimeString()}`;
+        t('status.last_lines', {time: new Date().toLocaleTimeString(uiLocale())});
     } catch (err) {
-      document.getElementById('ctr-log-output').textContent = `Error: ${err.message}`;
+      document.getElementById('ctr-log-output').textContent = t('error.generic', {msg: err.message});
     }
   }
 
@@ -1436,7 +1492,8 @@
 
   // ── Log modal ─────────────────────────────────────────────────────────────
 
-  function openLogModal(name, hostId = 'local', label = 'Update log') {
+  function openLogModal(name, hostId = 'local', label) {
+    if (!label) label = t('modal.update_log');
     logTarget = {name, hostId, startedAt: Date.now()};
     document.getElementById('log-modal-title').textContent = `${label} — ${name}`;
     document.getElementById('log-output').innerHTML = '';
@@ -1468,18 +1525,18 @@
       out.scrollTop = out.scrollHeight;
       const statusEl = document.getElementById('log-status-text');
       if (data.running) {
-        statusEl.textContent = 'Running…';
+        statusEl.textContent = t('status.running');
         logPollTimer = setTimeout(pollLogs, 800);
       } else {
         if (data.logs.length === 0 && logTarget && (Date.now() - (logTarget.startedAt || 0) < 4000)) {
-          statusEl.textContent = 'Starting…';
+          statusEl.textContent = t('status.starting');
           logPollTimer = setTimeout(pollLogs, 400);
           return;
         }
         const last = data.logs[data.logs.length-1] || '';
-        statusEl.textContent = last.startsWith('SUCCESS') ? '✅ Complete' : last.startsWith('ERROR') ? '❌ Failed' : 'Done';
+        statusEl.textContent = last.startsWith('SUCCESS') ? t('status.complete') : last.startsWith('ERROR') ? t('status.failed') : t('status.done');
         loadSettings();
-  fetchStatus();
+        fetchStatus();
       }
     } catch (e) {
       logPollTimer = setTimeout(pollLogs, 2000);
@@ -1490,7 +1547,7 @@
 
   function copyNotifyTopic(e) {
     navigator.clipboard.writeText(document.getElementById('notify-topic').textContent).then(() => {
-      e.target.textContent = 'Copied!'; setTimeout(() => e.target.textContent = 'Copy', 2000);
+      e.target.textContent = t('btn.copied'); setTimeout(() => e.target.textContent = t('btn.copy'), 2000);
     });
   }
 
@@ -1501,28 +1558,81 @@
 
   // ── Utils ─────────────────────────────────────────────────────────────────
 
+  function uiLocale() {
+    return I18N.currentLang === 'zh-CN' ? 'zh-CN' : 'en-AU';
+  }
+
   function timeAgo(iso) {
     const diff = (Date.now() - new Date(iso)) / 1000;
-    if (diff < 60)    return 'just now';
-    if (diff < 3600)  return `${Math.floor(diff/60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
-    return `${Math.floor(diff/86400)}d ago`;
+    if (diff < 60)    return t('time.just_now');
+    if (diff < 3600)  return t('time.m_ago', {n: Math.floor(diff/60)});
+    if (diff < 86400) return t('time.h_ago', {n: Math.floor(diff/3600)});
+    return t('time.d_ago', {n: Math.floor(diff/86400)});
   }
 
   function timeUntil(iso) {
     const diff = (new Date(iso) - Date.now()) / 1000;
-    if (diff <= 0)    return 'soon';
-    if (diff < 3600)  return `in ${Math.floor(diff/60)}m`;
-    if (diff < 86400) return `in ${Math.floor(diff/3600)}h`;
-    return `in ${Math.floor(diff/86400)}d`;
+    if (diff <= 0)    return t('time.soon');
+    if (diff < 3600)  return t('time.in_m', {n: Math.floor(diff/60)});
+    if (diff < 86400) return t('time.in_h', {n: Math.floor(diff/3600)});
+    return t('time.in_d', {n: Math.floor(diff/86400)});
   }
 
   function esc(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  loadSettings();
-  fetchStatus();
+  async function onLanguageChange(mode) {
+    const effectiveLang = I18N.setLanguage(mode);
+    try {
+      if (mode === 'auto') {
+        delete _settings.ui_language;
+        _settings.client_lang = effectiveLang;
+        await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ui_language: null, client_lang: effectiveLang }) });
+      } else {
+        _settings.ui_language = mode;
+        await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ui_language: mode }) });
+      }
+    } catch (e) {}
+    I18N.applyI18n();
+    if (currentTab === 'settings') renderSettingsPanel();
+    else if (currentTab === 'backups') renderBackupsPanel();
+    else if (currentTab === 'hosts') { _lastHostsJSON = ''; renderHostsPanel(); }
+    else renderContainerList(allContainers, currentTab);
+    updateSelectionUI();
+    if (typeof renderHistory === 'function') {
+      /* history refreshed via fetchStatus */
+    }
+    fetchStatus();
+  }
+
+  async function initApp() {
+    I18N.applyI18n();
+    await loadSettings();
+    if (_settings.auth_enabled) {
+      const f = document.getElementById('logout-form');
+      if (f) f.style.display = '';
+    }
+    const mode = I18N.getLangMode();
+    const effectiveLang = I18N.setLanguage(mode);
+    try {
+      if (mode === 'auto') {
+        delete _settings.ui_language;
+        _settings.client_lang = effectiveLang;
+        await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ui_language: null, client_lang: effectiveLang }) });
+      } else {
+        _settings.ui_language = mode;
+        await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ ui_language: mode }) });
+      }
+    } catch (e) {}
+    fetchStatus();
+  }
+
+  initApp();
 </script>
 </body>
 </html>

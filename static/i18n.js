@@ -1,0 +1,219 @@
+/* docker-updater i18n + dialogs (en / zh-CN) */
+(function (global) {
+  const MESSAGES = {"en":{"app.title":"Docker Updater","btn.check_now":"Check Now","btn.logout":"Log out","btn.copy":"Copy","btn.copied":"Copied!","btn.close":"Close","btn.cancel":"Cancel","btn.save":"Save","btn.clear":"Clear","btn.refresh":"↻ Refresh","btn.update_now":"Update Now","btn.update":"Update","btn.defer":"Defer","btn.undefer":"Un-defer","btn.logs":"Logs","btn.log":"Log","btn.rollback":"Rollback","btn.delete_backup":"Delete backup","btn.whats_new":"What's new?","btn.set_changelog":"Set changelog source","btn.edit_source":"Edit source","btn.show_reclaimable":"Show reclaimable images","btn.delete_selected_images":"Delete selected","btn.select_all":"Select all","btn.update_selected":"Update Selected ({n})","btn.add_host":"Add host","btn.test":"Test","btn.remove":"Remove","btn.confirm":"Confirm","btn.ok":"OK","tab.updates":"Updates","tab.deferred":"Deferred","tab.backups":"Backups","tab.up_to_date":"Up to Date","tab.unchecked":"Unchecked","tab.all":"All","tab.hosts":"Hosts","tab.settings":"Settings","banner.checking":"Checking for updates…","banner.notify_prefix":"Subscribe for push notifications:","banner.notify_hint":"Open ntfy app → Subscribe to topic → paste above","select.n_selected":"{n} selected","history.title":"Recent Updates","modal.update_log":"Update log","modal.rollback_log":"Rollback log","modal.defer_title":"Defer update","modal.defer_skip":"Skip this update for:","modal.defer_7":"7 days","modal.defer_14":"14 days","modal.defer_30":"30 days","modal.defer_90":"90 days","modal.defer_indef":"Indefinitely","modal.ctr_logs":"Container Logs","modal.changelog_src_title":"Set changelog source","modal.changelog_src_desc":"Paste the GitHub repository URL — docker-updater will fetch releases from it whenever you click What's new?","modal.changelog_src_hint":"⚑ Guessed from image name — verify before saving.","modal.whats_new":"What's new","modal.view_github":"View on GitHub ↗","modal.dialog_title":"Confirm","modal.alert_title":"Notice","empty.backups_title":"No backups","empty.backups_desc":"Enable backup retention in Settings, then backups will appear here after each update.","empty.update_title":"All up to date","empty.update_desc":"No updates available.","empty.deferred_title":"Nothing deferred","empty.deferred_desc":"No containers are currently deferred.","empty.ok_title":"All good","empty.ok_desc":"All containers have their latest image.","empty.unknown_title":"Nothing unchecked","empty.unknown_desc":"Click Check Now to scan for updates.","empty.all_title":"No containers","empty.all_desc":"No registry-tracked containers found.","empty.history":"No updates yet.","badge.update":"Update Available","badge.ok":"Up to Date","badge.deferred":"Deferred until {until}","badge.unknown":"Not Checked","badge.updating":"Updating…","badge.backup":"backup","badge.local":"Locally built","card.checked":"Checked {when}","card.not_checked":"Not yet checked","card.compose_title":"Docker Compose stack","card.expires":"expires {when}","status.running":"Running…","status.starting":"Starting…","status.complete":"✅ Complete","status.failed":"❌ Failed","status.done":"Done","status.ctr_running":"running","status.ctr_stopped":"stopped","status.last_lines":"Last 200 lines · refreshed {time}","time.just_now":"just now","time.m_ago":"{n}m ago","time.h_ago":"{n}h ago","time.d_ago":"{n}d ago","time.soon":"soon","time.in_m":"in {n}m","time.in_h":"in {n}h","time.in_d":"in {n}d","last_check":"Last check: {when}","last_check_never":"Never checked","stat.updates":"{n} updates","stat.ok":"{n} up to date","stat.deferred":"{n} deferred","stat.unknown":"{n} unchecked","hist.success":"Succeeded","hist.error_running":"Error (still running)","hist.error_stopped":"Error (stopped)","hist.running":"running","hist.stopped":"stopped","settings.appearance":"Appearance","settings.theme":"Theme","settings.theme_desc":"Changes the dashboard's colours. Status colours keep their meaning — green is always good, red is always a problem.","settings.language":"Language","settings.language_desc":"Auto follows your browser language. A manual choice is saved and used for push notifications.","settings.lang_auto":"Auto (browser)","settings.lang_en":"English","settings.lang_zh":"中文","settings.schedule":"Check Schedule","settings.schedule_label":"How often to check for updates","settings.schedule_desc":"Saved here and kept across restarts and updates. The CHECK_TIME environment variable only sets the initial default — once you choose a schedule here, this is what applies.","settings.every_6h":"Every 6 hours","settings.every_12h":"Every 12 hours","settings.daily":"Daily","settings.weekly":"Weekly","settings.monthly":"Monthly","settings.custom_cron":"Custom (cron)","settings.at":"at","settings.day_n":"day {n}","settings.cron_hint":"Standard 5-field cron — minute hour day month weekday","settings.next_check":"Next check: {when}","settings.behaviour":"Update Behaviour","settings.backup_label":"Keep backup after successful update","settings.backup_desc":"The previous container is kept stopped after an update and can be restored if the new version causes problems.","settings.keep_for":"Keep backup for","settings.1h":"1 hour","settings.6h":"6 hours","settings.24h":"24 hours","settings.7d":"7 days","settings.backup_note":"Stopped containers temporarily retain their previous image layer until the backup expires.","settings.restart_label":"Restart the rest of the Compose stack after an update","settings.restart_desc":"When a container started by Docker Compose is updated, its other stack members are restarted (not recreated) so they pick up the new container's IP. Helps services that cache connections to a sibling. Standalone containers are unaffected.","settings.cleanup_label":"Remove the old image after an update","settings.cleanup_desc":"After a successful update, the superseded image is deleted to reclaim disk space. While backup retention (above) is on, the old image is kept with the backup and only removed when that backup is deleted or expires — it's never pulled out from under a rollback point.","settings.prune_hint":"Lists dangling (untagged) images — pick which to delete, or select all. Only images not used by any container can be removed; named volumes are never touched.","settings.save_sched_err":"Could not save schedule.","day.sun":"Sunday","day.mon":"Monday","day.tue":"Tuesday","day.wed":"Wednesday","day.thu":"Thursday","day.fri":"Friday","day.sat":"Saturday","theme.github":"GitHub Dark","theme.midnight":"Midnight","theme.nord":"Nord","theme.dracula":"Dracula","theme.carbon":"Carbon","theme.light":"Light","prune.loading":"Loading…","prune.none":"No reclaimable dangling images found.","prune.load_err":"Could not load images.","prune.select_all":"Select all","prune.unknown_image":"unknown image","prune.total":"Total selected: {size}","prune.confirm":"Delete {n} image(s)? This cannot be undone.","prune.starting":"Starting…","prune.working":"Working — {done}/{total}…","prune.freed":"✅ Freed {freed} across {count} image(s).","prune.skipped":"{n} skipped:","prune.job_lost":"⚠️ Lost track of the job (server may have restarted) — refresh the list to check results.","prune.progress_err":"Could not check progress.","prune.start_err":"Could not start delete.","hosts.title":"Docker Hosts","hosts.local":"Local","hosts.local_desc":"This machine (Docker socket / DOCKER_HOST)","hosts.add_title":"Add remote host","hosts.name":"Name","hosts.url":"URL","hosts.url_placeholder":"ssh://user@host or tcp://host:2375","hosts.url_hint":"SSH uses your keys; TCP is unencrypted unless TLS is configured on the daemon.","hosts.empty":"No remote hosts yet. Add one above to manage multiple Docker engines.","hosts.connected":"✅ Connected — Docker {version}, {n} containers{keyNote}","hosts.key_note":" (host key accepted)","hosts.removed_cache":"Its cached state will be deleted.","hosts.remove_confirm":"Remove host \"{name}\"? Its cached state will be deleted.","hosts.test_fail":"Connection failed","hosts.remove_failed":"Could not remove host.","hosts.healthy":"Healthy","hosts.unreachable":"Unreachable","hosts.unknown":"Unknown","hosts.containers":"{n} containers","confirm.rollback":"Roll back \"{name}\" to its previous version?\n\nThis will stop the current container and restore the backup.","confirm.delete_backup":"Delete the backup for \"{name}\"? You will no longer be able to roll back to the previous version.","confirm.update_one":"Update \"{name}\"?\n\nThis will pull the latest image and recreate the container.","confirm.update_many":"Update {n} container(s)?\n\n{list}","alert.rollback_busy":"Could not start rollback — another operation may be in progress.","alert.delete_backup_fail":"Could not delete backup.","alert.update_busy":"Could not start update — another operation may be in progress.","changelog.loading":"Loading…","changelog.none":"No releases found.","changelog.error":"Could not load changelog.","changelog.invalid_url":"Enter a valid GitHub repository URL (https://github.com/owner/repo).","error.generic":"Error: {msg}","login.title":"Sign in","login.user":"Username","login.pass":"Password","login.submit":"Sign in","login.error":"Invalid username or password.","login.subtitle":"docker-updater","notify.updates_title":"Docker: {count} update available","notify.updates_title_plural":"Docker: {count} updates available","btn.testing":"Testing…","common.loading":"Loading…","common.failed":"Failed: {msg}","hosts.url_required":"URL is required.","hosts.name_url_required":"Name and URL are required.","hosts.added":"✅ Host added. Running a check now…","modal.defer_named":"Defer: {name}","modal.whats_new_named":"What's new — {name}","modal.changelog_src_named":"Set changelog source — {name}","modal.logs_named":"Logs — {name}","modal.update_log_named":"Update log — {name}","changelog.fetching":"Fetching release notes…","changelog.no_notes":"No release notes found.","changelog.no_body":"No release notes provided.","changelog.prerelease":"pre-release","changelog.save_failed":"Save failed.","logs.no_disk":"No log on disk yet — logs are saved after the next update.","logs.no_output":"(no output)","logs.exit_code":" (exit {code})","btn.dismiss":"Dismiss","btn.close_dialog":"Close dialog","app.view_changelog":"View changelog","prune.select_all_count":"Select all ({n} images)","prune.select_all_count_one":"Select all (1 image)","prune.selected_count":"{n} selected — {size}","webhook.issue_opened_title":"🐛 New issue — {repo}","webhook.issue_closed_title":"✅ Issue closed — {repo}","webhook.pr_opened_title":"🔀 New PR — {repo}","webhook.pr_merged_title":"✅ PR merged — {repo}","webhook.star_title":"⭐ New star — {repo}","webhook.push_title":"📦 Push to {branch} — {repo}","webhook.release_title":"🚀 New release — {repo}","webhook.comment_title":"💬 Comment — {repo}","webhook.commented_by":"{user} commented:","webhook.opened_by":"Opened by {user}","webhook.starred":"{user} starred ({count} total)","webhook.pushed_one":"{user} pushed 1 commit","webhook.pushed_many":"{user} pushed {count} commits","select.none_selected":"0 selected","btn.update_selected_none":"Update Selected (0)","notify.local_host":"Local"},"zh-CN":{"app.title":"Docker Updater","btn.check_now":"立即检查","btn.logout":"退出登录","btn.copy":"复制","btn.copied":"已复制!","btn.close":"关闭","btn.cancel":"取消","btn.save":"保存","btn.clear":"清除","btn.refresh":"↻ 刷新","btn.update_now":"立即更新","btn.update":"更新","btn.defer":"暂缓","btn.undefer":"取消暂缓","btn.logs":"日志","btn.log":"日志","btn.rollback":"回滚","btn.delete_backup":"删除备份","btn.whats_new":"更新说明","btn.set_changelog":"设置更新说明来源","btn.edit_source":"编辑来源","btn.show_reclaimable":"显示可回收镜像","btn.delete_selected_images":"删除所选","btn.select_all":"全选","btn.update_selected":"更新所选 ({n})","btn.add_host":"添加主机","btn.test":"测试","btn.remove":"移除","btn.confirm":"确认","btn.ok":"确定","tab.updates":"待更新","tab.deferred":"已暂缓","tab.backups":"备份","tab.up_to_date":"已最新","tab.unchecked":"未检查","tab.all":"全部","tab.hosts":"主机","tab.settings":"设置","banner.checking":"正在检查更新…","banner.notify_prefix":"订阅推送通知：","banner.notify_hint":"打开 ntfy 应用 → 订阅主题 → 粘贴上方主题名","select.n_selected":"已选 {n} 个","history.title":"最近更新","modal.update_log":"更新日志","modal.rollback_log":"回滚日志","modal.defer_title":"暂缓更新","modal.defer_skip":"将此更新推迟：","modal.defer_7":"7 天","modal.defer_14":"14 天","modal.defer_30":"30 天","modal.defer_90":"90 天","modal.defer_indef":"无限期","modal.ctr_logs":"容器日志","modal.changelog_src_title":"设置更新说明来源","modal.changelog_src_desc":"粘贴 GitHub 仓库 URL — 点击「更新说明」时将从该仓库拉取 Release。","modal.changelog_src_hint":"⚑ 已根据镜像名猜测 — 保存前请确认。","modal.whats_new":"更新说明","modal.view_github":"在 GitHub 上查看 ↗","modal.dialog_title":"请确认","modal.alert_title":"提示","empty.backups_title":"暂无备份","empty.backups_desc":"在设置中启用更新后保留备份，成功更新后会出现在这里。","empty.update_title":"全部已是最新","empty.update_desc":"当前没有可用更新。","empty.deferred_title":"没有暂缓项","empty.deferred_desc":"当前没有被暂缓的容器。","empty.ok_title":"一切正常","empty.ok_desc":"所有容器都已使用最新镜像。","empty.unknown_title":"没有未检查项","empty.unknown_desc":"点击「立即检查」扫描更新。","empty.all_title":"没有容器","empty.all_desc":"未发现由仓库跟踪的容器。","empty.history":"尚无更新记录。","badge.update":"有可用更新","badge.ok":"已是最新","badge.deferred":"暂缓至 {until}","badge.unknown":"未检查","badge.updating":"更新中…","badge.backup":"备份","badge.local":"本地构建","card.checked":"检查于 {when}","card.not_checked":"尚未检查","card.compose_title":"Docker Compose 栈","card.expires":"将于 {when} 过期","status.running":"运行中…","status.starting":"启动中…","status.complete":"✅ 完成","status.failed":"❌ 失败","status.done":"完成","status.ctr_running":"运行中","status.ctr_stopped":"已停止","status.last_lines":"最近 200 行 · 刷新于 {time}","time.just_now":"刚刚","time.m_ago":"{n} 分钟前","time.h_ago":"{n} 小时前","time.d_ago":"{n} 天前","time.soon":"即将","time.in_m":"{n} 分钟后","time.in_h":"{n} 小时后","time.in_d":"{n} 天后","last_check":"上次检查：{when}","last_check_never":"从未检查","stat.updates":"{n} 个更新","stat.ok":"{n} 个已最新","stat.deferred":"{n} 个已暂缓","stat.unknown":"{n} 个未检查","hist.success":"成功","hist.error_running":"出错（仍在运行）","hist.error_stopped":"出错（已停止）","hist.running":"运行中","hist.stopped":"已停止","settings.appearance":"外观","settings.theme":"主题","settings.theme_desc":"更改面板配色。状态色含义不变 — 绿色始终表示正常，红色表示问题。","settings.language":"语言","settings.language_desc":"自动跟随浏览器语言。手动选择会保存，并用于推送通知文案。","settings.lang_auto":"自动（浏览器）","settings.lang_en":"English","settings.lang_zh":"中文","settings.schedule":"检查计划","settings.schedule_label":"检查更新的频率","settings.schedule_desc":"保存在此处，重启与镜像更新后仍然有效。环境变量 CHECK_TIME 仅作为首次默认值 — 一旦在此选择计划，即以这里为准。","settings.every_6h":"每 6 小时","settings.every_12h":"每 12 小时","settings.daily":"每天","settings.weekly":"每周","settings.monthly":"每月","settings.custom_cron":"自定义（cron）","settings.at":"于","settings.day_n":"第 {n} 日","settings.cron_hint":"标准 5 段 cron — 分 时 日 月 星期","settings.next_check":"下次检查：{when}","settings.behaviour":"更新行为","settings.backup_label":"更新成功后保留备份","settings.backup_desc":"更新后保留已停止的旧容器，新版本出问题时可一键回滚。","settings.keep_for":"备份保留","settings.1h":"1 小时","settings.6h":"6 小时","settings.24h":"24 小时","settings.7d":"7 天","settings.backup_note":"备份过期前，停止的旧容器会暂时占用对应镜像层。","settings.restart_label":"更新后重启同一 Compose 栈的其它容器","settings.restart_desc":"当 Docker Compose 管理的容器更新后，会重启（非重建）同栈其它成员以便刷新 IP/DNS。独立容器不受影响。","settings.cleanup_label":"更新后删除旧镜像","settings.cleanup_desc":"更新成功后删除被替代的镜像以释放空间。若上方备份保留开启，旧镜像会随备份保留，仅在备份删除或过期时清理。","settings.prune_hint":"列出悬空（无标签）镜像 — 可多选或全选删除。仅未被任何容器使用的镜像可删；命名卷不会被触及。","settings.save_sched_err":"无法保存计划。","day.sun":"星期日","day.mon":"星期一","day.tue":"星期二","day.wed":"星期三","day.thu":"星期四","day.fri":"星期五","day.sat":"星期六","theme.github":"GitHub 暗色","theme.midnight":"午夜","theme.nord":"Nord","theme.dracula":"Dracula","theme.carbon":"Carbon","theme.light":"浅色","prune.loading":"加载中…","prune.none":"没有可回收的悬空镜像。","prune.load_err":"无法加载镜像列表。","prune.select_all":"全选","prune.unknown_image":"未知镜像","prune.total":"已选合计：{size}","prune.confirm":"删除 {n} 个镜像？此操作不可撤销。","prune.starting":"开始中…","prune.working":"处理中 — {done}/{total}…","prune.freed":"✅ 已释放 {freed}（{count} 个镜像）。","prune.skipped":"跳过 {n} 个：","prune.job_lost":"⚠️ 任务状态丢失（服务可能已重启）— 请刷新列表查看结果。","prune.progress_err":"无法查询进度。","prune.start_err":"无法开始删除。","hosts.title":"Docker 主机","hosts.local":"本地","hosts.local_desc":"本机（Docker 套接字 / DOCKER_HOST）","hosts.add_title":"添加远程主机","hosts.name":"名称","hosts.url":"URL","hosts.url_placeholder":"ssh://user@host 或 tcp://host:2375","hosts.url_hint":"SSH 使用系统密钥；TCP 除非守护进程配置了 TLS，否则不加密。","hosts.empty":"尚无远程主机。在上方添加以管理多台 Docker。","hosts.connected":"✅ 已连接 — Docker {version}，{n} 个容器{keyNote}","hosts.key_note":"（已接受主机密钥）","hosts.removed_cache":"其缓存状态将被删除。","hosts.remove_confirm":"移除主机 \"{name}\"？其缓存状态将被删除。","hosts.test_fail":"连接失败","hosts.remove_failed":"无法移除主机。","hosts.healthy":"正常","hosts.unreachable":"不可达","hosts.unknown":"未知","hosts.containers":"{n} 个容器","confirm.rollback":"将 \"{name}\" 回滚到上一版本？\n\n将停止当前容器并恢复备份。","confirm.delete_backup":"删除 \"{name}\" 的备份？之后将无法回滚到上一版本。","confirm.update_one":"更新 \"{name}\"？\n\n将拉取最新镜像并重建容器。","confirm.update_many":"更新 {n} 个容器？\n\n{list}","alert.rollback_busy":"无法开始回滚 — 可能有其它操作正在进行。","alert.delete_backup_fail":"无法删除备份。","alert.update_busy":"无法开始更新 — 可能有其它操作正在进行。","changelog.loading":"加载中…","changelog.none":"未找到 Release。","changelog.error":"无法加载更新说明。","changelog.invalid_url":"请输入有效的 GitHub 仓库 URL（https://github.com/owner/repo）。","error.generic":"错误：{msg}","login.title":"登录","login.user":"用户名","login.pass":"密码","login.submit":"登录","login.error":"用户名或密码错误。","login.subtitle":"docker-updater","notify.updates_title":"Docker：有 {count} 个可用更新","notify.updates_title_plural":"Docker：有 {count} 个可用更新","btn.testing":"测试中…","common.loading":"加载中…","common.failed":"失败：{msg}","hosts.url_required":"请输入 URL。","hosts.name_url_required":"请输入名称和 URL。","hosts.added":"✅ 主机已添加，正在检查更新…","modal.defer_named":"暂缓更新：{name}","modal.whats_new_named":"更新说明 — {name}","modal.changelog_src_named":"设置更新说明来源 — {name}","modal.logs_named":"日志 — {name}","modal.update_log_named":"更新日志 — {name}","changelog.fetching":"正在获取更新说明…","changelog.no_notes":"未找到更新说明。","changelog.no_body":"未提供更新说明。","changelog.prerelease":"预发布","changelog.save_failed":"保存失败。","logs.no_disk":"磁盘上尚无日志；下次更新后会保存日志。","logs.no_output":"（无输出）","logs.exit_code":"（退出码 {code}）","btn.dismiss":"关闭提示","btn.close_dialog":"关闭弹窗","app.view_changelog":"查看更新日志","prune.select_all_count":"全选（{n} 个镜像）","prune.select_all_count_one":"全选（1 个镜像）","prune.selected_count":"已选 {n} 个 — {size}","webhook.issue_opened_title":"🐛 新 Issue — {repo}","webhook.issue_closed_title":"✅ Issue 已关闭 — {repo}","webhook.pr_opened_title":"🔀 新 PR — {repo}","webhook.pr_merged_title":"✅ PR 已合并 — {repo}","webhook.star_title":"⭐ 新 Star — {repo}","webhook.push_title":"📦 推送至 {branch} — {repo}","webhook.release_title":"🚀 新版本发布 — {repo}","webhook.comment_title":"💬 新评论 — {repo}","webhook.commented_by":"{user} 评论：","webhook.opened_by":"由 {user} 创建","webhook.starred":"{user} 点赞了仓库（共 {count} 个 Star）","webhook.pushed_one":"{user} 推送了 1 个提交","webhook.pushed_many":"{user} 推送了 {count} 个提交","select.none_selected":"已选 0 个","btn.update_selected_none":"更新所选（0）","notify.local_host":"本地"}};
+
+  const LS_MODE = "du_lang_mode"; // auto | en | zh-CN
+
+  function browserLang() {
+    const nav = (navigator.language || navigator.userLanguage || "en").toLowerCase();
+    return nav.startsWith("zh") ? "zh-CN" : "en";
+  }
+
+  function getLangMode() {
+    const m = localStorage.getItem(LS_MODE);
+    if (m === "en" || m === "zh-CN" || m === "auto") return m;
+    return "auto";
+  }
+
+  function setLangMode(mode) {
+    if (mode === "en" || mode === "zh-CN" || mode === "auto") {
+      localStorage.setItem(LS_MODE, mode);
+    }
+  }
+
+  function resolveLang(mode) {
+    mode = mode || getLangMode();
+    if (mode === "en" || mode === "zh-CN") return mode;
+    return browserLang();
+  }
+
+  let currentLang = resolveLang();
+
+  function t(key, vars) {
+    const pack = MESSAGES[currentLang] || MESSAGES.en;
+    let s = (pack && pack[key]) || (MESSAGES.en && MESSAGES.en[key]) || key;
+    if (vars) {
+      s = s.replace(/\{(\w+)\}/g, (_, k) =>
+        vars[k] !== undefined && vars[k] !== null ? String(vars[k]) : ""
+      );
+    }
+    return s;
+  }
+
+  function setLanguage(mode) {
+    setLangMode(mode);
+    currentLang = resolveLang(mode);
+    document.documentElement.lang = currentLang === "zh-CN" ? "zh-CN" : "en";
+    applyI18n();
+    return currentLang;
+  }
+
+  function applyI18n(root) {
+    root = root || document;
+    root.querySelectorAll("[data-i18n]").forEach((el) => {
+      const key = el.getAttribute("data-i18n");
+      if (!key) return;
+      const val = t(key);
+      if (el.dataset.i18nAttr) {
+        el.setAttribute(el.dataset.i18nAttr, val);
+      } else {
+        el.textContent = val;
+      }
+    });
+    root.querySelectorAll("[data-i18n-html]").forEach((el) => {
+      el.innerHTML = t(el.getAttribute("data-i18n-html"));
+    });
+    root.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+      el.setAttribute("placeholder", t(el.getAttribute("data-i18n-placeholder")));
+    });
+    root.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      el.setAttribute("title", t(el.getAttribute("data-i18n-title")));
+    });
+    root.querySelectorAll("[data-i18n-aria-label]").forEach((el) => {
+      el.setAttribute("aria-label", t(el.getAttribute("data-i18n-aria-label")));
+    });
+    const titleEl = document.querySelector("title");
+    if (titleEl) titleEl.textContent = t("app.title");
+  }
+
+  // ── Custom dialogs ──────────────────────────────────────────────────────
+  let _dlgResolve = null;
+  let _dlgPreviousFocus = null;
+
+  function ensureDialogDom() {
+    if (document.getElementById("app-dialog-overlay")) return;
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+<div class="modal-overlay" id="app-dialog-overlay" style="z-index:300">
+  <div class="modal" style="width:min(420px,95vw)" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-message">
+    <div class="modal-header">
+      <h3 id="app-dialog-title"></h3>
+      <button type="button" class="btn-ghost" id="app-dialog-x" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
+    </div>
+    <div class="modal-body" style="padding:16px 18px">
+      <p id="app-dialog-message" style="white-space:pre-wrap;font-size:13px;line-height:1.55;margin:0;color:var(--text)"></p>
+    </div>
+    <div class="modal-footer" id="app-dialog-footer"></div>
+  </div>
+</div>`;
+    document.body.appendChild(wrap.firstElementChild);
+  }
+
+  function dialogFocusable() {
+    const ov = document.getElementById("app-dialog-overlay");
+    if (!ov) return [];
+    return Array.from(ov.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter((el) => el.offsetParent !== null);
+  }
+
+  function trapDialogFocus(e) {
+    if (e.key !== "Tab") return;
+    const focusable = dialogFocusable();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (!document.getElementById("app-dialog-overlay").contains(active)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  function closeDialog(result) {
+    const ov = document.getElementById("app-dialog-overlay");
+    if (ov) ov.classList.remove("open");
+    document.removeEventListener("keydown", onDialogKey);
+    const previous = _dlgPreviousFocus;
+    _dlgPreviousFocus = null;
+    const r = _dlgResolve;
+    _dlgResolve = null;
+    if (r) r(result);
+    if (previous && typeof previous.focus === "function" && document.contains(previous)) {
+      setTimeout(() => previous.focus(), 0);
+    }
+  }
+
+  function onDialogKey(e) {
+    if (e.key === "Tab") {
+      trapDialogFocus(e);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeDialog(false);
+    } else if (e.key === "Enter") {
+      const active = document.activeElement;
+      if (active && active.matches("button, a, input, select, textarea")) return;
+      e.preventDefault();
+      closeDialog(true);
+    }
+  }
+
+  function showDialog({ title, message, confirm }) {
+    ensureDialogDom();
+    return new Promise((resolve) => {
+      _dlgPreviousFocus = document.activeElement;
+      _dlgResolve = resolve;
+      document.getElementById("app-dialog-title").textContent =
+        title || (confirm ? t("modal.dialog_title") : t("modal.alert_title"));
+      document.getElementById("app-dialog-message").textContent = message || "";
+      const foot = document.getElementById("app-dialog-footer");
+      if (confirm) {
+        foot.innerHTML =
+          `<button type="button" class="btn-secondary btn-sm" id="app-dialog-cancel">${t("btn.cancel")}</button>` +
+          `<button type="button" class="btn-primary btn-sm" id="app-dialog-ok">${t("btn.confirm")}</button>`;
+      } else {
+        foot.innerHTML = `<button type="button" class="btn-primary btn-sm" id="app-dialog-ok">${t("btn.ok")}</button>`;
+      }
+      const ov = document.getElementById("app-dialog-overlay");
+      ov.classList.add("open");
+      document.getElementById("app-dialog-x").setAttribute("aria-label", t("btn.close_dialog"));
+      document.getElementById("app-dialog-ok").onclick = () => closeDialog(true);
+      const cancel = document.getElementById("app-dialog-cancel");
+      if (cancel) cancel.onclick = () => closeDialog(false);
+      document.getElementById("app-dialog-x").onclick = () => closeDialog(false);
+      ov.onclick = (e) => {
+        if (e.target === ov) closeDialog(false);
+      };
+      document.removeEventListener("keydown", onDialogKey);
+      document.addEventListener("keydown", onDialogKey);
+      setTimeout(() => document.getElementById("app-dialog-ok")?.focus(), 0);
+    });
+  }
+
+  function showAlert(message, title) {
+    return showDialog({ title, message, confirm: false }).then(() => undefined);
+  }
+
+  function showConfirm(message, title) {
+    return showDialog({ title, message, confirm: true });
+  }
+
+  // init language from storage immediately
+  currentLang = resolveLang();
+  if (document.documentElement) {
+    document.documentElement.lang = currentLang === "zh-CN" ? "zh-CN" : "en";
+  }
+
+  global.I18N = {
+    t,
+    applyI18n,
+    setLanguage,
+    getLangMode,
+    resolveLang,
+    browserLang,
+    get currentLang() {
+      return currentLang;
+    },
+  };
+  global.t = t;
+  global.showAlert = showAlert;
+  global.showConfirm = showConfirm;
+})(window);
