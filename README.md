@@ -27,15 +27,36 @@ The dashboard remains open by default for backward compatibility. On public or u
 | `AUTH_PASSWORD` | Dashboard password |
 | `FLASK_SECRET_KEY` | Optional session-signing key; otherwise generated at `/app/data/.secret_key` |
 
-Create an ignored `.env` file next to `docker-compose.yml`, then recreate the container:
+For Docker Compose, create `.env` beside `docker-compose.yml`:
 
 ```dotenv
 AUTH_USERNAME=admin
-AUTH_PASSWORD=replace-with-a-strong-password
-# FLASK_SECRET_KEY=replace-with-a-long-random-value
+AUTH_PASSWORD='replace-with-a-new-strong-password'
+# FLASK_SECRET_KEY='replace-with-a-long-random-value'
 ```
 
-Sessions last **7 days**. `/webhook/github` remains reachable without a login and still relies on `GITHUB_WEBHOOK_SECRET`. Put the WebUI behind HTTPS when exposing it publicly.
+A Compose `.env` file only supplies `${VARIABLE}` substitutions; it does not automatically inject every value into the container. Use the complete [docker-compose.yml example](#docker-composeyml), which already forwards all three variables. Do not add a second `services:` or `environment:` block.
+
+Apply environment changes by recreating the container (`restart` is not enough):
+
+```bash
+docker compose config --quiet
+docker compose up -d --force-recreate
+```
+
+Verify presence without printing either value, then check the startup log:
+
+```bash
+docker compose exec docker-updater sh -c '
+  test -n "$AUTH_USERNAME" && echo "AUTH_USERNAME: set" || echo "AUTH_USERNAME: missing"
+  test -n "$AUTH_PASSWORD" && echo "AUTH_PASSWORD: set" || echo "AUTH_PASSWORD: missing"
+'
+docker compose logs --tail=100 docker-updater
+```
+
+Successful setup logs `[auth] Login required (user='admin')`; `[auth] Open access` means the variables are missing or empty. In Synology's standalone-container UI, enter both variables in the container settings and recreate it because a nearby `.env` file is not loaded automatically. Paramiko `CryptographyDeprecationWarning` / TripleDES warnings are unrelated to dashboard authentication.
+
+Use the exact filename `.env` (not `.env.txt`), avoid spaces around `=`, protect it with `chmod 600 .env`, and never publish its contents. Sessions last **7 days**. `/webhook/github` remains reachable without a login and still relies on `GITHUB_WEBHOOK_SECRET`. Put the WebUI behind HTTPS when exposing it publicly.
 
 ## Language
 
@@ -120,18 +141,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
     environment:
-      - CHECK_TIME=03:00
-      - TIMEZONE=Australia/Melbourne
-      # NOTIFY_URL is optional — if omitted, a private ntfy topic is auto-generated
-      # and shown in the dashboard on first run. To use your own:
-      # - NOTIFY_URL=ntfy://ntfy.sh/your-private-topic
-      # - NOTIFY_URL=discord://webhookid/webhooktoken
-      - DOCKER_HOST=unix:///var/run/docker.sock
+      CHECK_TIME: "03:00"
+      TIMEZONE: Australia/Melbourne
+      NOTIFY_URL: ${NOTIFY_URL:-}
+      DOCKER_HOST: unix:///var/run/docker.sock
+      # Values are read from the .env file beside this Compose file.
+      AUTH_USERNAME: ${AUTH_USERNAME:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
 ```
 
-Save as `docker-compose.yml`, create a `data/` directory alongside it, then run `docker compose up -d`. No clone required.
+Save as `docker-compose.yml`, create a `data/` directory and the optional `.env` file alongside it, then run `docker compose up -d`. No clone required.
 
 > **Port note:** The container listens internally on port 9090. The host binding `9292:9090` avoids clashing with Prometheus, which commonly uses 9090. Change it to whatever suits your setup.
+
 
 ---
 
