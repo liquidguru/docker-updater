@@ -1,5 +1,7 @@
 import io
+import json
 import os
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -41,6 +43,27 @@ class AuthTests(unittest.TestCase):
         response = self.mod.app.test_client().get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Docker Updater", response.data)
+
+    def test_shared_i18n_catalog_is_injected_into_dashboard_and_login(self):
+        messages = {
+            "en": {"test.catalog": "English"},
+            "zh-CN": {"test.catalog": "中文"},
+        }
+
+        def assert_catalog(response):
+            self.assertEqual(response.status_code, 200)
+            match = re.search(
+                r"window\.I18N_MESSAGES = (.*?);",
+                response.get_data(as_text=True),
+                re.S,
+            )
+            self.assertIsNotNone(match, "Rendered page did not inject the shared i18n catalog")
+            self.assertEqual(json.loads(match.group(1)), messages)
+
+        with patch.object(self.mod, "_load_i18n_messages", return_value=messages):
+            assert_catalog(self.mod.app.test_client().get("/"))
+            self.enable_auth()
+            assert_catalog(self.mod.app.test_client().get("/login"))
 
     def test_protected_page_redirects_to_login(self):
         self.enable_auth()
