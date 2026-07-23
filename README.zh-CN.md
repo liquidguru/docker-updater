@@ -26,15 +26,36 @@
 | `AUTH_PASSWORD` | 面板登录密码 |
 | `FLASK_SECRET_KEY` | 可选的会话签名密钥；未设置时会在 `/app/data/.secret_key` 自动生成 |
 
-在 `docker-compose.yml` 同目录创建一个已被 Git 忽略的 `.env` 文件，然后重新创建容器：
+使用 Docker Compose 时，在 `docker-compose.yml` 同目录创建 `.env`：
 
 ```dotenv
 AUTH_USERNAME=admin
-AUTH_PASSWORD=replace-with-a-strong-password
-# FLASK_SECRET_KEY=replace-with-a-long-random-value
+AUTH_PASSWORD='请替换为新的高强度密码'
+# FLASK_SECRET_KEY='请替换为足够长的随机值'
 ```
 
-登录会话有效期为 **7 天**。`/webhook/github` 无需登录即可访问，但仍依赖 `GITHUB_WEBHOOK_SECRET` 验证请求。将 WebUI 暴露到公网时，请在前面配置 HTTPS。
+Compose 的 `.env` 只为 `${VARIABLE}` 提供替换值，不会自动把所有变量传入容器。请直接使用下方完整的 [docker-compose.yml 示例](#docker-composeyml)，其中已经转发了三项变量；不要再添加第二个 `services:` 或 `environment:` 块。
+
+环境变量变化后必须重新创建容器，单纯重启不会生效：
+
+```bash
+docker compose config --quiet
+docker compose up -d --force-recreate
+```
+
+在不输出真实值的情况下检查变量，再查看启动日志：
+
+```bash
+docker compose exec docker-updater sh -c '
+  test -n "$AUTH_USERNAME" && echo "AUTH_USERNAME: set" || echo "AUTH_USERNAME: missing"
+  test -n "$AUTH_PASSWORD" && echo "AUTH_PASSWORD: set" || echo "AUTH_PASSWORD: missing"
+'
+docker compose logs --tail=100 docker-updater
+```
+
+配置成功时日志显示 `[auth] Login required (user='admin')`；`[auth] Open access` 表示变量为空或未进入容器。使用 Synology 单容器界面时，请在容器设置中填写两项变量并重新创建容器，因为旁边的 `.env` 不会被自动读取。Paramiko `CryptographyDeprecationWarning` / TripleDES 警告与面板鉴权无关。
+
+文件名必须是 `.env` 而不是 `.env.txt`，等号两侧不要加空格；可执行 `chmod 600 .env` 限制权限，并且不要公开文件内容。会话有效期为 **7 天**。`/webhook/github` 无需登录即可访问，但仍依赖 `GITHUB_WEBHOOK_SECRET`。将 WebUI 暴露到公网时，请在前端配置 HTTPS。
 
 ## 语言
 
@@ -119,18 +140,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data:/app/data
     environment:
-      - CHECK_TIME=03:00
-      - TIMEZONE=Australia/Melbourne
-      # NOTIFY_URL 可选；省略时会自动生成私有 ntfy 主题，
-      # 并在首次运行时显示在面板中。如需使用自定义通知：
-      # - NOTIFY_URL=ntfy://ntfy.sh/your-private-topic
-      # - NOTIFY_URL=discord://webhookid/webhooktoken
-      - DOCKER_HOST=unix:///var/run/docker.sock
+      CHECK_TIME: "03:00"
+      TIMEZONE: Australia/Melbourne
+      NOTIFY_URL: ${NOTIFY_URL:-}
+      DOCKER_HOST: unix:///var/run/docker.sock
+      # 从与本 Compose 文件同目录的 .env 读取以下值。
+      AUTH_USERNAME: ${AUTH_USERNAME:-}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
 ```
 
-保存为 `docker-compose.yml`，在同一目录创建 `data/`，然后运行 `docker compose up -d`。无需克隆仓库。
+保存为 `docker-compose.yml`，在同一目录创建 `data/` 和可选的 `.env` 文件，然后运行 `docker compose up -d`。无需克隆仓库。
 
 > **端口说明：** 容器内部监听 9090 端口。主机绑定 `9292:9090` 可以避免与通常使用 9090 的 Prometheus 冲突；你可以根据环境修改主机端口。
+
 
 ---
 

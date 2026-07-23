@@ -12,6 +12,7 @@ All notable changes to docker-updater are documented here.
 
 ### Fixed
 - **Single-source translations** — Flask now injects `static/i18n_messages.json` into both UI templates, removing the duplicated client catalog and its manual synchronization requirement
+- **Authentication setup guidance** — document `.env` substitution versus container environment variables, required container recreation, safe verification commands, and Synology deployment steps
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
 ## [1.13.0] — 2026-07-15
