@@ -11,6 +11,7 @@ All notable changes to docker-updater are documented here.
 - **Optional login** — set `AUTH_USERNAME` and `AUTH_PASSWORD` to require sign-in with a 7-day session; open access remains the default when both are unset
 
 ### Fixed
+- **Single-source translations** — Flask now injects `static/i18n_messages.json` into both UI templates, removing the duplicated client catalog and its manual synchronization requirement
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
 ## [1.13.0] — 2026-07-15

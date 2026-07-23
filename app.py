@@ -1726,6 +1726,7 @@ def login():
         version=APP_VERSION,
         theme=_theme_from_state(),
         error=error,
+        i18n_messages=_load_i18n_messages(),
     )
 
 
@@ -1743,7 +1744,13 @@ def index():
         theme = load_state().get("theme", DEFAULT_THEME)
     if theme not in THEMES:
         theme = DEFAULT_THEME
-    return render_template("index.html", version=APP_VERSION, theme=theme, auth_enabled=AUTH_ENABLED)
+    return render_template(
+        "index.html",
+        version=APP_VERSION,
+        theme=theme,
+        auth_enabled=AUTH_ENABLED,
+        i18n_messages=_load_i18n_messages(),
+    )
 
 
 @app.route("/api/status")

@@ -52,10 +52,21 @@ class UiStaticTests(unittest.TestCase):
             for key, value in self.messages[language].items():
                 self.assertNotIn("??", value, f"Corrupt translation {language}.{key}: {value}")
 
-    def test_embedded_client_catalog_matches_shared_json(self):
-        line = next(line for line in self.i18n_js.splitlines() if line.startswith("  const MESSAGES = "))
-        embedded = json.loads(line.removeprefix("  const MESSAGES = ").removesuffix(";"))
-        self.assertEqual(embedded, self.messages)
+    def test_templates_inject_shared_catalog_before_runtime(self):
+        marker = "window.I18N_MESSAGES = {{ i18n_messages | tojson }};"
+        runtime = '<script src="/static/i18n.js"></script>'
+        for name, template in (("index", self.index), ("login", self.login)):
+            self.assertIn(marker, template, f"Missing shared catalog injection in {name} template")
+            self.assertLess(
+                template.index(marker),
+                template.index(runtime),
+                f"Catalog must be injected before i18n.js in {name} template",
+            )
+        self.assertIn(
+            'const MESSAGES = global.I18N_MESSAGES || { en: {}, "zh-CN": {} };',
+            self.i18n_js,
+        )
+        self.assertNotRegex(self.i18n_js, r'const MESSAGES = \{"en":')
 
     def test_all_referenced_translation_keys_exist(self):
         combined = self.index + self.login + self.i18n_js
