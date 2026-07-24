@@ -11,9 +11,13 @@ All notable changes to docker-updater are documented here.
 - **Optional login** — set `AUTH_USERNAME` and `AUTH_PASSWORD` to require sign-in with a 7-day session; open access remains the default when both are unset
 
 ### Fixed
-- **Single-source translations** — Flask now injects `static/i18n_messages.json` into both UI templates, removing the duplicated client catalog and its manual synchronization requirement
-- **Authentication setup guidance** — document `.env` substitution versus container environment variables, required container recreation, safe verification commands, and Synology deployment steps
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
+
+## [1.14.1] — 2026-07-24
+
+### Fixed
+- **Single-source translations** — the client-side catalog in `static/i18n.js` was a hand-maintained copy of `static/i18n_messages.json`, with no generator keeping the two in sync. `app.py` now loads the JSON once and injects it into both `templates/index.html` and `templates/login.html` via Jinja `{{ i18n_messages | tojson }}`, so `i18n.js` has no embedded strings left — the two catalogs can no longer drift apart
+- **Authentication setup guidance** — the README's Compose auth example didn't make clear that a `.env` file only supplies `${VAR}` substitution values and doesn't automatically inject them into the container's environment. Docs now show the full `environment:` mapping, forced-recreate instructions, and a verification snippet (`docker compose exec ... test -n "$AUTH_USERNAME"`) to confirm the variables actually reached the container before relying on them (thanks @Warm-winter)
 
 ## [1.13.0] — 2026-07-15
 
