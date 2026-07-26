@@ -148,6 +148,8 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+      DOCKERHUB_USERNAME: ${DOCKERHUB_USERNAME:-}
+      DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
 ```
 
 保存为 `docker-compose.yml`，在同一目录创建 `data/` 和可选的 `.env` 文件，然后运行 `docker compose up -d`。无需克隆仓库。
@@ -168,6 +170,8 @@ services:
 | `AUTH_USERNAME` | *（空）* | 面板登录用户名；必须同时设置 `AUTH_PASSWORD` 才会启用鉴权。 |
 | `AUTH_PASSWORD` | *（空）* | 面板登录密码；绝不会写入 `state.json`。 |
 | `FLASK_SECRET_KEY` | *（自动生成）* | 可选的会话签名密钥；省略时持久化到 `/app/data/.secret_key`。 |
+| `DOCKERHUB_USERNAME` | *（空）* | Docker Hub 用户名，用于对检查更新的请求进行认证以提高速率限制。必须同时设置 `DOCKERHUB_TOKEN`。 |
+| `DOCKERHUB_TOKEN` | *（空）* | Docker Hub **个人访问令牌**（不是密码）。仅发送给 Docker Hub；绝不会写入 `state.json`。 |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker Socket 路径 |
 
 ---

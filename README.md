@@ -150,6 +150,8 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+      DOCKERHUB_USERNAME: ${DOCKERHUB_USERNAME:-}
+      DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
 ```
 
 Save as `docker-compose.yml`, create a `data/` directory and the optional `.env` file alongside it, then run `docker compose up -d`. No clone required.
