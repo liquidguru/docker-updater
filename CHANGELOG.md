@@ -13,6 +13,21 @@ All notable changes to docker-updater are documented here.
 ### Fixed
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
+## [1.14.3] — 2026-07-26
+
+Follow-up to the v1.14.2 safety release, closing the gaps a second review found
+in the update/rollback paths.
+
+### Fixed
+- **A crash-looping replacement no longer counts as a successful update** — the check two seconds after starting a container accepted `restarting` as success. A container stuck in a crash loop therefore passed, and (with backup retention off) the known-good container it replaced was then deleted. Replacements are now polled a few times and `restarting`, `exited`, `dead` and `unhealthy` are all failures
+- **The previous container is kept when health can't be confirmed** — if the image defines a HEALTHCHECK that hasn't passed yet, the update is allowed to stand but the old container is retained as a backup (and tracked, so it appears in the Backups tab and expires normally) instead of being removed. Applies to updates, rollbacks and self-update
+- **Self-update no longer races its own replacement into deleting the fallback** — the replacement updater runs startup recovery as soon as it boots, while the helper container is still verifying it. With backup retention off it treated `<name>_old` as an orphan and removed it — the very container the helper would need if verification then failed. The helper now claims that backup before starting the replacement, and finalises or clears the claim afterwards
+- **A failed rollback now tries to restore the outgoing container** — if promoting the backup failed (e.g. a name conflict), nothing put the parked container back and the name was left with nothing serving it. Compensation now covers that path too. If the name cannot be freed at all, whichever container holds it is started rather than leaving nothing running — Docker rename/start failures can still require a manual check, which is reported in the update log
+- **A failed backup is stopped before being demoted** — it was renamed while still running, so it kept its published ports and the container being restored could not bind them
+- **A demoted backup gets its restart policy reset to `no`** — after a failed rollback the promoted backup kept the live restart policy, so a host reboot could start it alongside the real container
+- **A rollback interrupted part-way is now recovered on startup** — the outgoing container is parked as `<name>_rollingback` during a rollback, which a scan for `_old` could not see. Startup recovery now restores it, but only when no container currently holds `<name>`
+- **Parked containers are excluded from the dashboard** — `<name>_rollingback` was treated as a managed service, so it appeared in update checks and could be picked as a Compose stack sibling to restart
+
 ## [1.14.2] — 2026-07-26
 
 Safety release. An audit of the destructive code paths found three ways an

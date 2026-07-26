@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.14.2"
+APP_VERSION          = "1.14.3"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -129,6 +129,62 @@ _stack_updated: dict[str, set] = {}   # stack key -> names just updated (exclude
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _is_helper_container(name: str) -> bool:
+    """True for containers docker-updater creates during an operation: `_old`
+    backups and the `_rollingback` container parked mid-rollback. Neither is a
+    managed service, so both must stay out of update checks and the dashboard."""
+    return name.endswith(("_old", "_rollingback"))
+
+
+def _container_is_up(client, name: str, checks: int = 3,
+                     interval: int = 2) -> tuple[bool, bool, str]:
+    """Check that a freshly started container actually stayed up.
+
+    Returns `(ok, health_confirmed, reason)`.
+
+    A single status peek two seconds after starting treated `restarting` as
+    success — so a crash-looping container counted as a good update, and the
+    known-good container it replaced was then removed. Polling a few times
+    catches that without turning every update into a long wait.
+
+    `health_confirmed` is deliberately separate from `ok`: if the image defines
+    a HEALTHCHECK that hasn't reported healthy yet, the container is serving but
+    unproven, which is not a good enough reason to destroy the only way back.
+    """
+    last_status = "unknown"
+    has_healthcheck = False
+    healthy = False
+    for i in range(max(1, checks)):
+        if i:
+            time.sleep(interval)
+        try:
+            c = client.containers.get(name)
+        except docker.errors.NotFound:
+            return False, False, "container disappeared"
+        except Exception as e:
+            return False, False, f"could not inspect container: {e}"
+        state = c.attrs.get("State") or {}
+        last_status = state.get("Status") or getattr(c, "status", None) or "unknown"
+        if last_status in ("exited", "dead", "removing", "paused"):
+            code = state.get("ExitCode")
+            extra = f" (exit {code})" if code not in (None, "", 0) else ""
+            return False, False, f"container {last_status}{extra}"
+        if last_status == "restarting":
+            return False, False, "container is restarting (crash loop)"
+        health = ((state.get("Health") or {}).get("Status") or "").lower()
+        if health:
+            has_healthcheck = True
+            if health == "unhealthy":
+                return False, False, "healthcheck reports unhealthy"
+            healthy = health == "healthy"
+
+    if last_status != "running":
+        return False, False, f"container is {last_status}"
+    if has_healthcheck and not healthy:
+        return True, False, "running, but its healthcheck has not passed yet"
+    return True, True, "running"
+
 
 def _container_key(name: str, host_id: str = "local") -> str:
     """Unique key for _update_logs / _update_running across hosts."""
@@ -442,7 +498,7 @@ def _do_stack_restart(client, host_id: str, project: str, key: str) -> None:
     try:
         targets = []
         for c in client.containers.list():
-            if c.name.endswith("_old") or c.name in updated:
+            if _is_helper_container(c.name) or c.name in updated:
                 continue
             if (c.labels or {}).get("com.docker.compose.project") != project:
                 continue
@@ -486,6 +542,33 @@ def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | N
         print("[self-update-helper] state.json updated.")
     except Exception as e:
         print(f"[self-update-helper] Failed to update state.json: {e}")
+
+
+def _helper_reserve_backup(name: str, hours: int, policy: dict) -> None:
+    """Claim `<name>_old` as a retained backup *before* the replacement updater
+    is started.
+
+    The replacement runs its own startup recovery as soon as it boots, while
+    this helper is still verifying it. With backup retention off and no rollback
+    entry, that recovery treats `<name>_old` as an orphan and deletes it — the
+    very container this helper may need to restore. Writing the entry first makes
+    recovery leave it alone; it is corrected or cleared once verification ends.
+    """
+    if not os.path.exists(DATA_DIR):
+        return
+    try:
+        state = load_state()
+        state.setdefault("rollbacks", {})[name] = {
+            "backed_up_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "expires_at": (datetime.datetime.utcnow()
+                           + datetime.timedelta(hours=max(1, hours))).isoformat() + "Z",
+            "restart_policy": policy,
+        }
+        save_state(state)
+        print(f"[self-update-helper] Reserved '{name}_old' so the replacement's "
+              f"startup recovery cannot remove it mid-verification.")
+    except Exception as e:
+        print(f"[self-update-helper] Could not reserve backup: {e}")
 
 
 def _run_self_update_helper() -> None:
@@ -611,18 +694,23 @@ def _run_self_update_helper() -> None:
                     ipv6_address=net_info.get("ipv6_address"),
                 )
 
+        # Claim the backup before the replacement can boot and run its own
+        # startup recovery — otherwise it may delete `_old` while we verify.
+        if old_container is not None:
+            _helper_reserve_backup(name, backup_hours, orig_policy)
+
         client.api.start(new_c["Id"])
-        time.sleep(2)
+        # Same rule as a normal update: `restarting` is a crash loop, not
+        # success, and an unproven replacement must keep its fallback.
+        ok, health_ok, why = _container_is_up(client, name)
+        if not ok:
+            raise RuntimeError(f"new container did not stay up: {why}")
         started = client.containers.get(name)
-        if started.status not in ("running", "restarting"):
-            raise RuntimeError(
-                f"New container exited immediately (status={started.status})"
-            )
 
         # ── Success ───────────────────────────────────────────────────────────
-        print(f"[self-update-helper] {name} is running.")
+        print(f"[self-update-helper] {name} is up ({why}).")
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
-        if backup_enabled:
+        if backup_enabled or not health_ok:
             expires_iso = (
                 datetime.datetime.utcnow() + datetime.timedelta(hours=backup_hours)
             ).isoformat() + "Z"
@@ -630,7 +718,11 @@ def _run_self_update_helper() -> None:
                 "backed_up_at": now_iso, "expires_at": expires_iso,
                 "restart_policy": orig_policy,
             }
-            print(f"[self-update-helper] Backup kept for {backup_hours}h.")
+            if backup_enabled:
+                print(f"[self-update-helper] Backup kept for {backup_hours}h.")
+            else:
+                print(f"[self-update-helper] {why} — keeping {old_name} as a "
+                      f"backup for {backup_hours}h.")
         else:
             rollback_entry = None
             if old_container is not None:
@@ -658,14 +750,28 @@ def _run_self_update_helper() -> None:
         print(f"[self-update-helper] Recreation failed: {recreate_err}")
         print(f"[self-update-helper] Rolling back to previous container...")
         try:
+            _name_free = True
             if new_c is not None:
                 try:
                     failed = client.containers.get(name)
                     failed.stop(timeout=10)
                     failed.remove()
-                except Exception:
+                except docker.errors.NotFound:
                     pass
-            if old_container is not None:
+                except Exception as e:
+                    print(f"[self-update-helper] Could not remove the failed container: {e}")
+                    _name_free = False
+            if not _name_free:
+                # It still owns the name, so the old container cannot take it
+                # back — a rename would just fail. A running new container beats
+                # nothing running at all.
+                print("[self-update-helper] Failed container still holds the name; "
+                      "restarting it rather than leaving nothing running. Check it.")
+                try:
+                    client.containers.get(name).start()
+                except Exception as e:
+                    print(f"[self-update-helper] Could not restart it either: {e}")
+            elif old_container is not None:
                 old_container.rename(name)
                 try:
                     client.api.update_container(old_container.id, restart_policy=orig_policy)
@@ -987,8 +1093,8 @@ def _scan_host(client, host_id: str) -> dict:
     available = {}
     for container in client.containers.list():
         name = container.name
-        if name.endswith("_old"):
-            continue  # skip backup containers created by docker-updater
+        if _is_helper_container(name):
+            continue  # skip helper containers created by docker-updater
         image_name = container.attrs["Config"]["Image"]
         if is_locally_built(container):
             continue
@@ -1363,20 +1469,26 @@ def apply_update(container_name: str, host_id: str = "local",
 
             client.api.start(new_c["Id"])
 
-            # Verify the new container actually stayed up
-            time.sleep(2)
+            # Verify the new container actually stayed up.
+            emit("▶ Verifying the new container...")
+            _ok, _health_ok, _why = _container_is_up(client, container_name)
+            if not _ok:
+                raise RuntimeError(f"new container did not stay up: {_why}")
             started = client.containers.get(container_name)
-            if started.status not in ("running", "restarting"):
-                raise RuntimeError(
-                    f"New container exited immediately (status={started.status}). "
-                    "Check logs for startup errors."
-                )
 
-            if _backup_enabled:
+            # Keep the old container if retention is on, or if we could not
+            # positively confirm the new one is healthy — never remove the only
+            # way back on the strength of an unproven replacement.
+            _keep_backup = _backup_enabled or not _health_ok
+            if _keep_backup:
                 _expires = (datetime.datetime.utcnow() + datetime.timedelta(hours=_backup_hours)).isoformat() + "Z"
-                emit(f"  Backup '{old_name}' kept for {_backup_hours}h — rollback available.")
+                if _backup_enabled:
+                    emit(f"  Backup '{old_name}' kept for {_backup_hours}h — rollback available.")
+                else:
+                    emit(f"  {_why.capitalize()} — keeping '{old_name}' as a backup "
+                         f"for {_backup_hours}h rather than removing it.")
                 if _cleanup_images:
-                    emit("  Old image kept — backup retention is on. It will be "
+                    emit("  Old image kept while that backup exists. It will be "
                          "removed when the backup is deleted or expires.")
             else:
                 emit("▶ Removing old container...")
@@ -1390,13 +1502,27 @@ def apply_update(container_name: str, host_id: str = "local",
             emit("▶ Rolling back to previous container...")
             try:
                 # Remove the failed new container if it was created
+                _name_free = True
                 if new_c is not None:
                     try:
                         failed = client.containers.get(container_name)
                         failed.stop(timeout=10)
                         failed.remove()
-                    except Exception:
+                    except docker.errors.NotFound:
                         pass
+                    except Exception as e:
+                        emit(f"  Could not remove the failed container: {e}")
+                        _name_free = False
+                if not _name_free:
+                    # It still owns the name, so renaming the backup onto it can
+                    # only fail. Leave something running rather than nothing.
+                    emit("  The failed container still holds the name — restarting it "
+                         "rather than leaving nothing running. Please check it.")
+                    try:
+                        client.containers.get(container_name).start()
+                    except Exception as e:
+                        emit(f"  Could not restart it either: {e}")
+                    raise RuntimeError("could not free the container name")
                 # Rename _old back to original name, restore restart policy, restart
                 old_container.rename(container_name)
                 try:
@@ -1423,7 +1549,7 @@ def apply_update(container_name: str, host_id: str = "local",
             "backed_up_at": datetime.datetime.utcnow().isoformat() + "Z",
             "expires_at": _expires,
             "restart_policy": hcfg.get("RestartPolicy", {"Name": "unless-stopped"}),
-        } if _backup_enabled else None
+        } if _keep_backup else None
         if host_id == "local":
             with _state_lock:
                 state = load_state()
@@ -1557,8 +1683,30 @@ def apply_rollback(container_name: str, host_id: str = "local",
         except docker.errors.NotFound:
             emit("  Current container not found, continuing...")
 
+        def _unpark(why: str) -> None:
+            """Put the container we were rolling back FROM back into service."""
+            if _restore_spec is None:
+                return
+            emit(f"▶ {why}")
+            try:
+                _prev = client.containers.get(f"{container_name}_rollingback")
+                _prev.rename(container_name)
+                _prev.start()
+                emit("  Previous container is running again — no service lost.")
+            except Exception as e:
+                emit(f"  Could not restore it automatically: {e}")
+                emit(f"  Manual step: rename '{container_name}_rollingback' back to "
+                     f"'{container_name}' and start it.")
+
         emit("▶ Restoring previous container...")
-        old_container.rename(container_name)
+        try:
+            old_container.rename(container_name)
+        except Exception as _promote_err:
+            # The backup could not take over the name. Nothing is serving it, so
+            # put the container we parked back before giving up.
+            emit(f"\nERROR: Could not promote the backup: {_promote_err}")
+            _unpark("Restoring the container we rolled back from...")
+            raise RuntimeError(f"rollback aborted — could not promote backup: {_promote_err}")
         # Restore the original restart policy (was set to "no" when backup was made).
         try:
             if host_id == "local":
@@ -1571,43 +1719,97 @@ def apply_rollback(container_name: str, host_id: str = "local",
             client.api.update_container(old_container.id, restart_policy=_orig_policy)
         except Exception:
             pass
+        _health_ok = False
         try:
             old_container.start()
-            time.sleep(2)
-            _restored = client.containers.get(container_name)
-            if _restored.status not in ("running", "restarting"):
-                raise RuntimeError(f"restored container is {_restored.status}")
+            _ok, _health_ok, _why = _container_is_up(client, container_name)
+            if not _ok:
+                raise RuntimeError(_why)
         except Exception as _start_err:
-            # The backup failed to come up. Undo the cutover and put the
-            # container we were rolling back FROM back into service, rather
-            # than leaving nothing running.
-            emit(f"\nERROR: The backup failed to start: {_start_err}")
+            # The backup didn't come up. Undo the cutover and put the container
+            # we were rolling back FROM back into service, rather than leaving
+            # nothing running.
+            emit(f"\nERROR: The backup did not come up: {_start_err}")
+            _demoted = False
             try:
-                old_container.rename(old_name)
-            except Exception:
-                pass
-            if _restore_spec is not None:
-                emit("▶ Restoring the container we rolled back from...")
+                # Stop it first. An unhealthy or crash-looping container still
+                # holds its published ports, and renaming does not release them
+                # — so the container we're about to restore would fail to bind.
                 try:
-                    _prev = client.containers.get(f"{container_name}_rollingback")
-                    _prev.rename(container_name)
-                    _prev.start()
-                    emit("  Previous container is running again — no service lost.")
-                except Exception as _undo_err:
-                    emit(f"  Could not restore it automatically: {_undo_err}")
-                    emit(f"  Manual step: rename '{container_name}_rollingback' "
-                         f"back to '{container_name}' and start it.")
+                    old_container.stop(timeout=30)
+                except Exception:
+                    pass
+                old_container.rename(old_name)
+                _demoted = True
+                # It is a backup again, so put its restart policy back to "no";
+                # leaving the live policy on it would let a host reboot start it
+                # alongside the real container.
+                try:
+                    client.api.update_container(old_container.id,
+                                                restart_policy={"Name": "no"})
+                except Exception as e:
+                    emit(f"  Note: could not reset backup restart policy: {e}")
+            except Exception as e:
+                emit(f"  Note: could not return it to '{old_name}': {e}")
+            if _demoted:
+                _unpark("Restoring the container we rolled back from...")
+            else:
+                # It still owns the name, so the parked container cannot take it
+                # back. Start it so something is serving, and say so plainly.
+                emit("  It still holds the name, so the previous container cannot "
+                     "take it back — starting it so something is serving.")
+                emit(f"  Please check '{container_name}' manually.")
+                try:
+                    old_container.start()
+                except Exception as e:
+                    emit(f"  Could not start it either: {e}")
             raise RuntimeError(f"rollback failed, backup would not start: {_start_err}")
 
-        # Cutover succeeded — now it is safe to discard the container we
-        # rolled back from.
-        try:
-            _spent = client.containers.get(f"{container_name}_rollingback")
-            _spent.remove(force=True)
-        except docker.errors.NotFound:
-            pass
-        except Exception as _rm_err:
-            emit(f"  Note: could not remove '{container_name}_rollingback': {_rm_err}")
+        # Cutover succeeded. Only discard the container we rolled back from if
+        # the replacement's health was actually confirmed — otherwise keep it as
+        # a normal backup so there is still a way back.
+        _kept_entry = None
+        _park = f"{container_name}_rollingback"
+        if _health_ok:
+            try:
+                client.containers.get(_park).remove(force=True)
+            except docker.errors.NotFound:
+                pass
+            except Exception as _rm_err:
+                emit(f"  Note: could not remove '{_park}': {_rm_err}")
+        else:
+            try:
+                _kept = client.containers.get(_park)
+                _kept.rename(old_name)
+                try:
+                    client.api.update_container(_kept.id,
+                                                restart_policy={"Name": "no"})
+                except Exception as e:
+                    # Keeping the fallback is worth more than a tidy policy, but
+                    # say so loudly: on a reboot both could try to claim the same
+                    # ports until one is dealt with.
+                    emit(f"  WARNING: could not set '{old_name}' to restart=no ({e}).")
+                    emit(f"  On a host reboot it could start alongside "
+                         f"'{container_name}'. Delete it from the Backups tab "
+                         f"once you're happy with the rollback.")
+                with _state_lock:
+                    _kb = load_state() if host_id == "local" else load_host_state(host_id)
+                _kb_hours = int(_kb.get("backup_hours", 24))
+                _kept_entry = {
+                    "backed_up_at": datetime.datetime.utcnow().isoformat() + "Z",
+                    "expires_at": (datetime.datetime.utcnow()
+                                   + datetime.timedelta(hours=_kb_hours)).isoformat() + "Z",
+                    # The policy belongs to the container being kept, not the
+                    # one we just promoted.
+                    "restart_policy": ((_restore_spec or {}).get("hcfg", {})
+                                       .get("RestartPolicy") or {"Name": "unless-stopped"}),
+                }
+                emit(f"  {_why.capitalize()} — kept the previous container "
+                     f"as backup '{old_name}'.")
+            except docker.errors.NotFound:
+                pass
+            except Exception as _kp_err:
+                emit(f"  Note: could not keep the previous container: {_kp_err}")
         emit(f"\nSUCCESS: {container_name} rolled back to previous version.")
 
         history_entry = {
@@ -1618,13 +1820,19 @@ def apply_rollback(container_name: str, host_id: str = "local",
         if host_id == "local":
             with _state_lock:
                 state = load_state()
-                state.setdefault("rollbacks", {}).pop(container_name, None)
+                if _kept_entry:
+                    state.setdefault("rollbacks", {})[container_name] = _kept_entry
+                else:
+                    state.setdefault("rollbacks", {}).pop(container_name, None)
                 state["history"].insert(0, history_entry)
                 state["history"] = state["history"][:50]
                 save_state(state)
         else:
             hs = load_host_state(host_id)
-            hs.setdefault("rollbacks", {}).pop(container_name, None)
+            if _kept_entry:
+                hs.setdefault("rollbacks", {})[container_name] = _kept_entry
+            else:
+                hs.setdefault("rollbacks", {}).pop(container_name, None)
             hs.setdefault("history", []).insert(0, history_entry)
             hs["history"] = hs["history"][:50]
             save_host_state(host_id, hs)
@@ -1917,8 +2125,8 @@ def api_status():
         client = docker.from_env()
         for container in client.containers.list():
             name       = container.name
-            if name.endswith("_old"):
-                continue  # skip backup containers created by docker-updater
+            if _is_helper_container(name):
+                continue  # skip helper containers created by docker-updater
             image_name = container.attrs["Config"]["Image"]
             if is_locally_built(container):
                 continue
@@ -2657,6 +2865,38 @@ def recover_interrupted_operations() -> None:
     except Exception as e:
         print(f"[recover] Docker unavailable, skipping recovery: {e}")
         return
+
+    # A rollback parks the outgoing container as '<name>_rollingback' while it
+    # promotes the backup. If we died in that window nothing is serving the real
+    # name, and a scan for '_old' alone would not see it — so put the parked
+    # container back. Only ever acts when the real name is genuinely free, so it
+    # cannot fight a container that is already serving.
+    try:
+        parked = [c for c in client.containers.list(all=True)
+                  if c.name.endswith("_rollingback")]
+    except Exception as e:
+        print(f"[recover] Could not list containers: {e}")
+        parked = []
+    for _p in parked:
+        _base = _p.name[: -len("_rollingback")]
+        try:
+            client.containers.get(_base)
+            print(f"[recover] '{_base}' is present; leaving '{_p.name}' for the "
+                  f"Backups tab / operator review")
+            continue
+        except docker.errors.NotFound:
+            pass
+        except Exception as e:
+            print(f"[recover] Could not check '{_base}': {e}; leaving '{_p.name}' alone")
+            continue
+        try:
+            _p.rename(_base)
+            _p.start()
+            print(f"[recover] Restored '{_base}' from an interrupted rollback")
+        except Exception as e:
+            print(f"[recover] CRITICAL: could not restore '{_base}' from "
+                  f"'{_p.name}': {e}")
+
     try:
         olds = [c for c in client.containers.list(all=True) if c.name.endswith("_old")]
     except Exception as e:
