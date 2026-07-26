@@ -13,6 +13,18 @@ All notable changes to docker-updater are documented here.
 ### Fixed
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
+## [1.14.2] — 2026-07-26
+
+Safety release. An audit of the destructive code paths found three ways an
+operation could damage a running container; all are fixed here, each with
+failure-injection tests.
+
+### Fixed
+- **Rollback could destroy a service with nothing to restore** — `apply_rollback` stopped *and removed* the live container before it ever looked for the backup. If the backup was missing, expired, or its image had been cleaned up, the container was already gone and the rollback failed with no way back. Rollback now runs a preflight (backup exists, has an image reference, and that image is still present locally) and aborts with the live container untouched if any check fails. During cutover the outgoing container is renamed aside rather than deleted, and if the backup won't start it is put back into service automatically — so no failure path can leave nothing running
+- **A failed image pull no longer replaces a working container** — Docker reports pull failures as an `error` field inside the streamed response rather than raising, so a failed pull (bad credentials, missing tag, network interruption) was logged and then ignored, and the container was recreated anyway. A stream error now aborts before anything is touched, and the pulled tag is verified to resolve to a local image before replacement proceeds
+- **Duplicate operations on the same container** — the API checked whether an operation was in flight, released the lock, then started a worker that did the actual claiming, so two rapid requests could both pass and spawn two workers against one container. The claim is now made atomically with the check, shared by update and rollback, and returns `409 Conflict` to the loser
+- **Self-update left its own old image behind** — image cleanup ran in the normal update path but not in the self-update helper, so docker-updater was the one container whose superseded image was never reclaimed even with cleanup enabled. The helper now performs the same cleanup (reported by @monkeyotg in #13)
+
 ## [1.14.1] — 2026-07-24
 
 ### Fixed

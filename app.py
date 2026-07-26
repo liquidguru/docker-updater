@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.14.1"
+APP_VERSION          = "1.14.2"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -133,6 +133,30 @@ _stack_updated: dict[str, set] = {}   # stack key -> names just updated (exclude
 def _container_key(name: str, host_id: str = "local") -> str:
     """Unique key for _update_logs / _update_running across hosts."""
     return name if host_id == "local" else f"{host_id}:{name}"
+
+
+def _reserve_operation(name: str, host_id: str = "local") -> str | None:
+    """Atomically claim a container for an update/rollback, or return None if
+    one is already in flight.
+
+    The claim must happen under the same lock as the check: previously the
+    route checked membership, released the lock, and only the worker thread
+    added the key — so two quick requests could both pass and spawn two
+    workers against the same container. Callers own the release (the worker's
+    `finally` discards the key).
+    """
+    key = _container_key(name, host_id)
+    with _logs_lock:
+        if key in _update_running:
+            return None
+        _update_running.add(key)
+        _update_logs[key] = []
+    return key
+
+
+def _release_operation(key: str) -> None:
+    with _logs_lock:
+        _update_running.discard(key)
 
 
 # ── Local state ───────────────────────────────────────────────────────────────
@@ -490,6 +514,8 @@ def _run_self_update_helper() -> None:
     full_nets      = spec["full_nets"]
     backup_enabled = spec.get("backup_enabled", False)
     backup_hours   = int(spec.get("backup_hours", 24))
+    cleanup_images = spec.get("cleanup_images", False)
+    old_image_id   = spec.get("old_image_id")
     orig_policy    = hcfg.get("RestartPolicy", {"Name": "unless-stopped"})
     old_name       = f"{name}_old"
 
@@ -613,6 +639,13 @@ def _run_self_update_helper() -> None:
                     print(f"[self-update-helper] Removed {old_name}.")
                 except Exception as e:
                     print(f"[self-update-helper] Could not remove {old_name}: {e}")
+            # Remove our own superseded image (issue #13). The normal update
+            # path does this inline, but a self-update hands off to this helper
+            # after the old process is gone — so without this, docker-updater
+            # was the one container that always left its old image behind.
+            if cleanup_images:
+                _cleanup_old_image(client, old_image_id, started.image.id,
+                                   lambda m: print(f"[self-update-helper] {m}"))
 
         history_entry = {
             "container": name, "image": image_name,
@@ -1077,11 +1110,16 @@ def _exposed_ports(cfg: dict) -> list:
     return out
 
 
-def apply_update(container_name: str, host_id: str = "local") -> None:
+def apply_update(container_name: str, host_id: str = "local",
+                 reserved: bool = False) -> None:
+    # `reserved=True` means the caller already claimed this container via
+    # _reserve_operation (the API routes do, to close the double-start race).
     key = _container_key(container_name, host_id)
+    if not reserved and _reserve_operation(container_name, host_id) is None:
+        print(f"[update:{host_id}:{container_name}] already in progress — skipping")
+        return
     with _logs_lock:
-        _update_logs[key] = []
-        _update_running.add(key)
+        _update_logs.setdefault(key, [])
     log = _update_logs[key]
 
     image_name = "?"  # will be overwritten once container config is read
@@ -1117,6 +1155,11 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
         emit("")
         emit("▶ Pulling latest image...")
 
+        # Docker reports pull failures as an `error` field inside the stream
+        # rather than raising, so this must be treated as fatal — otherwise a
+        # failed pull (bad auth, missing tag, network drop) would fall through
+        # and we'd replace a working container using whatever image is present.
+        _pull_error = None
         for chunk in client.api.pull(image_name, stream=True, decode=True):
             status = chunk.get("status", "")
             detail = chunk.get("progress", "") or chunk.get("error", "")
@@ -1124,7 +1167,25 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                           "Status: Downloaded newer image for") or "Pull complete" in status:
                 emit(f"  {status} {detail}".rstrip())
             if "error" in chunk:
-                emit(f"  ERROR: {chunk['error']}")
+                _pull_error = chunk.get("error") or str(chunk.get("errorDetail") or "unknown")
+                emit(f"  ERROR: {_pull_error}")
+        if _pull_error:
+            emit("\nERROR: Pull failed — aborting before any change to the container.")
+            emit(f"  {_pull_error}")
+            emit(f"  '{container_name}' has NOT been touched and is still running.")
+            raise RuntimeError(f"pull failed: {_pull_error}")
+
+        # Confirm the tag actually resolves to a local image now. A pull that
+        # reported no error but left nothing usable must not proceed either.
+        try:
+            _pulled = client.images.get(image_name)
+            _new_image_id = _pulled.id
+        except docker.errors.ImageNotFound:
+            emit(f"\nERROR: Image '{image_name}' is not available locally after the pull.")
+            emit(f"  '{container_name}' has NOT been touched and is still running.")
+            raise RuntimeError(f"image unavailable after pull: {image_name}")
+        if old_image_id and _new_image_id == old_image_id:
+            emit("  (image unchanged — recreating with the same image)")
 
         # ── Self-update detection ─────────────────────────────────────────────
         # If we're updating our own container, we can't do the stop/rename/
@@ -1155,6 +1216,7 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                 _su_bst = load_state()
             _su_backup_enabled = _su_bst.get("backup_enabled", False)
             _su_backup_hours   = int(_su_bst.get("backup_hours", 24))
+            _su_cleanup_images = _su_bst.get("cleanup_images", False)
 
             # Find the host-side path for /app/data so the helper can mount it
             # and write the rollback entry + history to state.json.
@@ -1170,6 +1232,8 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
                 "cfg": cfg, "hcfg": hcfg, "full_nets": _su_nets,
                 "backup_enabled": _su_backup_enabled,
                 "backup_hours": _su_backup_hours,
+                "cleanup_images": _su_cleanup_images,
+                "old_image_id": old_image_id,
             })
             _su_spec_b64 = base64.b64encode(_su_spec.encode()).decode()
             _su_volumes = {
@@ -1418,11 +1482,14 @@ def apply_update(container_name: str, host_id: str = "local") -> None:
 
 # ── Rollback ─────────────────────────────────────────────────────────────────
 
-def apply_rollback(container_name: str, host_id: str = "local") -> None:
+def apply_rollback(container_name: str, host_id: str = "local",
+                   reserved: bool = False) -> None:
     key = _container_key(container_name, host_id)
+    if not reserved and _reserve_operation(container_name, host_id) is None:
+        print(f"[rollback:{host_id}:{container_name}] already in progress — skipping")
+        return
     with _logs_lock:
-        _update_logs[key] = []
-        _update_running.add(key)
+        _update_logs.setdefault(key, [])
     log = _update_logs[key]
 
     def emit(line: str) -> None:
@@ -1444,16 +1511,53 @@ def apply_rollback(container_name: str, host_id: str = "local") -> None:
         emit(f"Container : {container_name}")
         emit(f"Host      : {host_id}")
         emit("")
+
+        # ── Preflight ─────────────────────────────────────────────────────────
+        # Verify the backup is actually usable BEFORE touching the live
+        # container. Previously the current container was stopped and removed
+        # first, so a missing/unusable backup left the service destroyed with
+        # nothing to restore. Never take the service down on a hope.
+        emit("▶ Verifying backup before making any changes...")
+        try:
+            old_container = client.containers.get(old_name)
+        except docker.errors.NotFound:
+            emit(f"\nERROR: No backup container '{old_name}' found.")
+            emit("  The current container has NOT been touched and is still running.")
+            raise RuntimeError(f"rollback aborted — backup '{old_name}' not found")
+
+        _bk_image = (old_container.attrs.get("Config") or {}).get("Image")
+        _bk_image_id = old_container.attrs.get("Image")
+        if not _bk_image_id:
+            emit("\nERROR: Backup container has no image reference.")
+            emit("  The current container has NOT been touched and is still running.")
+            raise RuntimeError("rollback aborted — backup has no image reference")
+        try:
+            client.images.get(_bk_image_id)
+        except docker.errors.ImageNotFound:
+            emit(f"\nERROR: The backup's image is no longer present ({_bk_image}).")
+            emit("  It was probably removed by an image cleanup.")
+            emit("  The current container has NOT been touched and is still running.")
+            raise RuntimeError("rollback aborted — backup image missing")
+        emit(f"  Backup OK — '{old_name}' ({_bk_image}).")
+
         emit("▶ Stopping current container...")
+        _restore_spec = None
         try:
             current = client.containers.get(container_name)
+            # Keep enough to put the current container back if the backup
+            # turns out not to start (see the recovery block below).
+            _restore_spec = {
+                "cfg": current.attrs.get("Config") or {},
+                "hcfg": current.attrs.get("HostConfig") or {},
+                "nets": (current.attrs.get("NetworkSettings") or {}).get("Networks") or {},
+                "image": (current.attrs.get("Config") or {}).get("Image"),
+            }
             current.stop(timeout=30)
-            current.remove()
+            current.rename(f"{container_name}_rollingback")
         except docker.errors.NotFound:
             emit("  Current container not found, continuing...")
 
         emit("▶ Restoring previous container...")
-        old_container = client.containers.get(old_name)
         old_container.rename(container_name)
         # Restore the original restart policy (was set to "no" when backup was made).
         try:
@@ -1467,7 +1571,43 @@ def apply_rollback(container_name: str, host_id: str = "local") -> None:
             client.api.update_container(old_container.id, restart_policy=_orig_policy)
         except Exception:
             pass
-        old_container.start()
+        try:
+            old_container.start()
+            time.sleep(2)
+            _restored = client.containers.get(container_name)
+            if _restored.status not in ("running", "restarting"):
+                raise RuntimeError(f"restored container is {_restored.status}")
+        except Exception as _start_err:
+            # The backup failed to come up. Undo the cutover and put the
+            # container we were rolling back FROM back into service, rather
+            # than leaving nothing running.
+            emit(f"\nERROR: The backup failed to start: {_start_err}")
+            try:
+                old_container.rename(old_name)
+            except Exception:
+                pass
+            if _restore_spec is not None:
+                emit("▶ Restoring the container we rolled back from...")
+                try:
+                    _prev = client.containers.get(f"{container_name}_rollingback")
+                    _prev.rename(container_name)
+                    _prev.start()
+                    emit("  Previous container is running again — no service lost.")
+                except Exception as _undo_err:
+                    emit(f"  Could not restore it automatically: {_undo_err}")
+                    emit(f"  Manual step: rename '{container_name}_rollingback' "
+                         f"back to '{container_name}' and start it.")
+            raise RuntimeError(f"rollback failed, backup would not start: {_start_err}")
+
+        # Cutover succeeded — now it is safe to discard the container we
+        # rolled back from.
+        try:
+            _spent = client.containers.get(f"{container_name}_rollingback")
+            _spent.remove(force=True)
+        except docker.errors.NotFound:
+            pass
+        except Exception as _rm_err:
+            emit(f"  Note: could not remove '{container_name}_rollingback': {_rm_err}")
         emit(f"\nSUCCESS: {container_name} rolled back to previous version.")
 
         history_entry = {
@@ -1951,22 +2091,22 @@ def api_check():
 @app.route("/api/update/<name>", methods=["POST"])
 def api_update(name):
     host_id = request.args.get("host", "local")
-    key = _container_key(name, host_id)
-    with _logs_lock:
-        if key in _update_running:
-            return jsonify({"error": "Already updating"}), 409
-    threading.Thread(target=apply_update, args=(name, host_id), daemon=True).start()
+    # Claim the container before spawning the worker, so two rapid requests
+    # can't both pass the check and start duplicate operations.
+    if _reserve_operation(name, host_id) is None:
+        return jsonify({"error": "Already updating"}), 409
+    threading.Thread(target=apply_update, args=(name, host_id),
+                     kwargs={"reserved": True}, daemon=True).start()
     return jsonify({"ok": True})
 
 
 @app.route("/api/rollback/<name>", methods=["POST"])
 def api_rollback(name):
     host_id = request.args.get("host", "local")
-    key = _container_key(name, host_id)
-    with _logs_lock:
-        if key in _update_running:
-            return jsonify({"error": "Operation already in progress"}), 409
-    threading.Thread(target=apply_rollback, args=(name, host_id), daemon=True).start()
+    if _reserve_operation(name, host_id) is None:
+        return jsonify({"error": "Operation already in progress"}), 409
+    threading.Thread(target=apply_rollback, args=(name, host_id),
+                     kwargs={"reserved": True}, daemon=True).start()
     return jsonify({"ok": True})
 
 
