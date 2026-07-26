@@ -85,7 +85,7 @@ The WebUI supports **English** and **简体中文**:
 - **Compose stack chip** — containers started by Docker Compose show a small stack name chip on the card, read from the `com.docker.compose.project` label; standalone containers are unaffected
 - **Restart the Compose stack after an update** — opt-in Settings toggle (default off): when you update a Compose-managed container, the other members of the same stack are restarted (not recreated) so they pick up the new container's IP/DNS — no more manual `docker compose restart`. Bulk updates within one stack are debounced to a single round; the updated containers, `_old` backups, docker-updater itself, and any member mid-update are excluded
 - **Self-update** — docker-updater can update its own container: it pulls the new image, then hands off the stop/recreate to a short-lived helper container (spawned from the new image) that does the restart after the old process exits, with no manual intervention required
-- **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), preserving all original config: volumes, ports, environment variables, networks, static IPs, restart policy, capabilities, etc.
+- **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), carrying over volumes and named mounts, ports, environment variables, networks, static IPs and aliases, restart policy, capabilities, devices, privileged/security options, DNS and extra hosts, PID/IPC mode and tmpfs (see [Caveats](#caveats) for settings that are *not* carried over)
 - **Backup & rollback** — optionally keep the previous container after a successful update for a configurable window (Settings tab); roll back to it in one click if the new version misbehaves, or delete the backup early to reclaim space
 - **Image cleanup** — opt-in toggle to remove the superseded image after a successful update (backup-aware: never removed while a kept backup still references it). Plus a "Show reclaimable images" list in Settings — see every dangling image with its repository name, size, and age, select individual ones or all, and delete on demand; runs as a background job so a large batch can't be cut short by a proxy timeout, and any image that's still referenced is skipped with the actual blocking container named, not a generic error
 - **Health-verified updates** — a replacement is polled a few times before the container it replaced is discarded; `restarting` is treated as a crash loop rather than success, and if the image defines a HEALTHCHECK that hasn't passed yet the old container is retained as a backup instead of being removed
@@ -353,7 +353,7 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
 
 ## How it works
 
-1. On startup (silently) and at the configured `CHECK_TIME`, docker-updater iterates all running containers
+1. On startup (silently) and on the configured [check schedule](#check-schedule), docker-updater iterates all running containers (except its own `_old` / `_rollingback` helpers)
 2. For each container it extracts the matching local image digest from `RepoDigests`
 3. It sends a `HEAD` request to the registry for the image's manifest, reading the `Docker-Content-Digest` response header — no image data is transferred
 4. If the digests differ on a multi-arch image, it checks the platform manifest/config digest so index-only changes don't create false update alerts
@@ -361,7 +361,7 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
 6. When you click **Update**, the app:
    - Pulls the new image (streaming progress to the log modal)
    - Stops the old container and renames it to `{name}_old` (kept as a rollback target)
-   - Creates and starts the new container with identical config using the Docker SDK low-level API (Watchtower pattern)
+   - Creates and starts the new container using the Docker SDK low-level API (Watchtower pattern), carrying over its configuration (with the exceptions listed under [Caveats](#caveats))
    - Reconnects all networks via `NetworkConnect`, preserving static IP assignments, aliases, and iptables setup
    - Polls the new container a few times to confirm it actually stayed up — `restarting` counts as a crash loop, not success — and waits for a `healthy` result if the image defines a HEALTHCHECK
    - **On success**: removes the `_old` container — or keeps it for the configured window if backup retention is enabled, *or* if the health check hasn't confirmed yet (see [Backup & rollback](#backup--rollback))
@@ -427,6 +427,13 @@ mkdir -p data
 docker compose up -d   # uses the build: . compose file in the repo
 ```
 
+Run the test suite before opening a PR:
+
+```bash
+python -m unittest discover -s tests -v
+node --check static/i18n.js
+```
+
 ---
 
 ## Replacing Watchtower
@@ -444,6 +451,7 @@ docker rm watchtower
 
 - **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed. Optionally, the other members of the stack can be **restarted** after an update so they pick up the new container's IP (Settings → *Restart the rest of the Compose stack after an update*).
 - **Named volumes**: Preserved automatically — both bind mounts (`HostConfig.Binds`) and named/`--mount` volumes (`HostConfig.Mounts`, where Compose stores them) are reattached on recreation.
+- **Settings not carried over on recreation**: recreation copies an explicit list of settings, so anything outside that list falls back to the Docker daemon's default. Most notably **resource limits** (memory, CPU, PIDs), **GPU/device requests**, **an explicitly-set logging driver**, **ulimits**, **sysctls**, `read-only` root, `--init`, custom `shm-size`, added groups, and a non-default runtime. If a container relies on any of these, prefer recreating it through Compose after the update, or check it afterwards. (A setting that merely matches the daemon default is unaffected — e.g. on Synology, containers using the default `db` log driver keep it.)
 - **Locally-built images**: Any container whose image has no `RepoDigests` is skipped (these can't be compared against a registry).
 - **Private registries**: Supports anonymous and Bearer-token registries, plus authenticated Docker Hub (see [Docker Hub rate limits](#docker-hub-rate-limits)). Credentials for other registries are not yet supported — if you need them, open an issue saying which registry.
 - **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required ones. If the container *crashes* as a result it will be caught and rolled back automatically — but an image that starts cleanly and is only broken at the application level will pass the health check, so still check release notes for new required env vars.
