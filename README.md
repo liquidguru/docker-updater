@@ -167,6 +167,8 @@ Save as `docker-compose.yml`, create a `data/` directory and the optional `.env`
 | `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check — any [tz database name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *(auto)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications. If not set, a unique private ntfy.sh topic is generated automatically. |
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Secret for verifying GitHub webhook signatures. Required if using the GitHub notifications feature. |
+| `DOCKERHUB_USERNAME` | *(empty)* | Docker Hub username, to authenticate digest checks and raise the rate limit — see [Docker Hub rate limits](#docker-hub-rate-limits). Needs `DOCKERHUB_TOKEN` too. |
+| `DOCKERHUB_TOKEN` | *(empty)* | Docker Hub **personal access token** (not your password). Only ever sent to Docker Hub; never stored in `state.json`. |
 | `AUTH_USERNAME` | *(empty)* | Dashboard login name; authentication requires this and `AUTH_PASSWORD`. |
 | `AUTH_PASSWORD` | *(empty)* | Dashboard password; never stored in `state.json`. |
 | `FLASK_SECRET_KEY` | *(generated)* | Optional session-signing key; persisted as `/app/data/.secret_key` when omitted. |
@@ -181,6 +183,39 @@ Save as `docker-compose.yml`, create a `data/` directory and the optional `.env`
 Status colours keep their meaning in every theme — green always means good, red always means a problem — and are re-tuned per theme for contrast (Light uses darker greens and reds so they stay legible on a pale background).
 
 Adding your own is easy: each theme is a single `[data-theme="..."]` block of 11 CSS variables in `templates/index.html`; every translucent tint across the UI is derived from those via `color-mix()`. Add the block, then add the name to `THEMES` in `app.py`.
+
+---
+
+## Docker Hub rate limits
+
+Checking for updates costs **one manifest request per tracked container, per check**. Docker Hub rate limits anonymous requests per IP address — currently 100 per hour — so a large number of containers, a frequent schedule, or several machines behind the same address can exhaust it. When that happens checks start failing rather than reporting updates.
+
+Authenticating raises the limit. Create a **personal access token** at [Docker Hub → Account settings → Personal access tokens](https://app.docker.com/settings/personal-access-tokens) (read-only is enough — docker-updater only reads manifests) and set:
+
+```dotenv
+DOCKERHUB_USERNAME=your-username
+DOCKERHUB_TOKEN=dckr_pat_...
+```
+
+Confirm it took effect in the startup log:
+
+```
+[registry] Docker Hub: authenticating as 'your-username'
+```
+
+`[registry] Docker Hub: anonymous ...` means the variables didn't reach the container — remember a Compose `.env` file only provides `${VAR}` substitution, so they also need to be listed under `environment:` (the [example compose file](#docker-composeyml) already does this).
+
+The remaining allowance is logged after each check, with a warning when it gets low:
+
+```
+[checker] Complete — 2 total update(s). Registry rate limit — registry-1.docker.io: 87/100 left.
+```
+
+Notes:
+
+- Credentials are only ever sent to Docker Hub. GHCR, LSCR and other registries are unaffected, and they have their own (generally far more generous) limits.
+- If the credentials are rejected, docker-updater logs it and falls back to anonymous checks rather than failing outright.
+- This covers the **update checks**. The actual `docker pull` is performed by the Docker daemon using its own credentials, so run `docker login` on the host as well if your pulls are also being limited.
 
 ---
 
@@ -408,7 +443,7 @@ docker rm watchtower
 - **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed. Optionally, the other members of the stack can be **restarted** after an update so they pick up the new container's IP (Settings → *Restart the rest of the Compose stack after an update*).
 - **Named volumes**: Preserved automatically — both bind mounts (`HostConfig.Binds`) and named/`--mount` volumes (`HostConfig.Mounts`, where Compose stores them) are reattached on recreation.
 - **Locally-built images**: Any container whose image has no `RepoDigests` is skipped (these can't be compared against a registry).
-- **Private registries**: Currently supports anonymous and Bearer-token registries. Basic auth (username/password) registries are not yet supported.
+- **Private registries**: Supports anonymous and Bearer-token registries, plus authenticated Docker Hub (see [Docker Hub rate limits](#docker-hub-rate-limits)). Credentials for other registries are not yet supported — if you need them, open an issue saying which registry.
 - **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required environment variables. If an update fails with an application-level error after recreation, check the image's release notes for new required env vars.
 - **host network mode**: Containers using `--network host` are recreated correctly; the network reconnect step is skipped for these.
 - **Backup retention & disk space**: with backup retention enabled, each backup keeps a stopped container and its previous image layers until the backup expires (or you delete it from the Backups tab). On hosts with limited disk, keep the retention window short or delete backups once you're confident in an update.

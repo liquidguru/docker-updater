@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.14.3"
+APP_VERSION          = "1.15.0"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -89,6 +89,14 @@ CHECK_TIME            = os.environ.get("CHECK_TIME", "03:00")
 TIMEZONE              = os.environ.get("TIMEZONE", "Australia/Melbourne")
 NOTIFY_URL            = os.environ.get("NOTIFY_URL", "").strip()
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+
+# Optional Docker Hub credentials for digest checks (issue #17). Anonymous
+# requests are rate limited per IP, and every container costs one manifest
+# request per check — enough containers or frequent enough checks and you run
+# out. Authenticating raises the limit. Use a personal access token, not your
+# password. Both must be set to take effect.
+DOCKERHUB_USERNAME    = os.environ.get("DOCKERHUB_USERNAME", "").strip()
+DOCKERHUB_TOKEN       = os.environ.get("DOCKERHUB_TOKEN", "").strip()
 
 # Optional dashboard auth. Both must be set (non-empty) to enable login.
 _AUTH_USER_RAW = os.environ.get("AUTH_USERNAME", "").strip()
@@ -965,19 +973,71 @@ def _manifest_matches_platform(manifest: dict, platform: dict | None) -> bool:
     return True
 
 
-def _token_from_challenge(www_auth: str) -> str | None:
+_DOCKERHUB_HOSTS = ("registry-1.docker.io", "index.docker.io", "docker.io")
+
+
+def _registry_credentials(registry: str | None) -> tuple[str, str] | None:
+    """Credentials to authenticate a registry token request, if configured.
+
+    Only Docker Hub today — that's where the anonymous rate limit actually
+    bites, because a digest check costs one manifest request per container per
+    check (issue #17). Structured so other registries can be added without
+    touching the callers.
+    """
+    if registry and registry.lower() in _DOCKERHUB_HOSTS:
+        if DOCKERHUB_USERNAME and DOCKERHUB_TOKEN:
+            return DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+    return None
+
+
+def _token_from_challenge(www_auth: str, registry: str | None = None) -> str | None:
     params: dict[str, str] = {}
     for m in re.finditer(r'(\w+)="([^"]*)"', www_auth):
         params[m.group(1)] = m.group(2)
     realm = params.pop("realm", None)
     if not realm:
         return None
+    # Presenting credentials here is what raises the rate limit: the registry
+    # issues a token tied to the account rather than to the caller's IP.
+    creds = _registry_credentials(registry)
     try:
-        r = requests.get(realm, params=params, timeout=10)
+        r = requests.get(realm, params=params, timeout=10, auth=creds)
+        if r.status_code in (401, 403) and creds:
+            print(f"[registry] {registry}: credentials rejected ({r.status_code}) "
+                  f"— falling back to anonymous access")
+            r = requests.get(realm, params=params, timeout=10)
         data = r.json()
         return data.get("token") or data.get("access_token")
     except Exception:
         return None
+
+
+_rate_limit_seen: dict[str, str] = {}
+
+
+def _note_rate_limit(registry: str, response) -> None:
+    """Record the registry's advertised rate limit, if it sends one.
+
+    Docker Hub returns RateLimit-Limit / RateLimit-Remaining on manifest
+    requests. Surfacing it is the difference between "checks mysteriously stop
+    working" and "you have 4 pulls left" (issue #17). Logged only when the
+    remaining count changes bucket, so it doesn't spam every check.
+    """
+    try:
+        remaining = response.headers.get("RateLimit-Remaining")
+        limit = response.headers.get("RateLimit-Limit")
+        if not remaining:
+            return
+        # Values look like "76;w=21600" — the count is before the semicolon.
+        left = remaining.split(";")[0].strip()
+        total = (limit or "").split(";")[0].strip()
+        summary = f"{left}/{total}" if total else left
+        _rate_limit_seen[registry] = summary
+        if left.isdigit() and int(left) <= 10:
+            print(f"[registry] {registry}: only {summary} manifest requests left "
+                  f"in this window")
+    except Exception:
+        pass
 
 
 def get_remote_digest(
@@ -992,12 +1052,18 @@ def get_remote_digest(
         headers = {"Accept": MANIFEST_ACCEPT}
         r = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
         if r.status_code == 401:
-            token = _token_from_challenge(r.headers.get("WWW-Authenticate", ""))
+            token = _token_from_challenge(r.headers.get("WWW-Authenticate", ""), registry)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
                 r = requests.head(url, headers=headers, timeout=10, allow_redirects=True)
         if r.status_code == 405:
             r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        _note_rate_limit(registry, r)
+        if r.status_code == 429:
+            print(f"[registry] {registry}: rate limited (HTTP 429) checking "
+                  f"{image_name}. Set DOCKERHUB_USERNAME/DOCKERHUB_TOKEN to "
+                  f"authenticate and raise the limit.")
+            return None
         if r.status_code == 200:
             remote = r.headers.get("Docker-Content-Digest")
             ct = r.headers.get("Content-Type", "")
@@ -1169,7 +1235,9 @@ def check_for_updates(notify: bool = False) -> None:
                 save_host_state(host_id, hs)
 
         count = len(all_updates)
-        print(f"[checker] Complete — {count} total update(s).")
+        _rl = ", ".join(f"{h}: {v} left" for h, v in _rate_limit_seen.items())
+        print(f"[checker] Complete — {count} total update(s)."
+              + (f" Registry rate limit — {_rl}." if _rl else ""))
 
         if notify and count > 0:
             # Group by host label for a clean notification body
@@ -3006,6 +3074,14 @@ if __name__ == "__main__":
         print(f"[auth] Login required (user={AUTH_USERNAME!r})")
     else:
         print("[auth] Open access (set AUTH_USERNAME and AUTH_PASSWORD to enable login)")
+    if DOCKERHUB_USERNAME and DOCKERHUB_TOKEN:
+        print(f"[registry] Docker Hub: authenticating as {DOCKERHUB_USERNAME!r}")
+    elif DOCKERHUB_USERNAME or DOCKERHUB_TOKEN:
+        print("[registry] WARNING: set both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN "
+              "to authenticate to Docker Hub; ignoring the one that is set")
+    else:
+        print("[registry] Docker Hub: anonymous (set DOCKERHUB_USERNAME and "
+              "DOCKERHUB_TOKEN to raise the rate limit)")
 
 
     remote_hosts = load_hosts()

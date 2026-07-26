@@ -13,6 +13,13 @@ All notable changes to docker-updater are documented here.
 ### Fixed
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
+## [1.15.0] — 2026-07-27
+
+### Added
+- **Docker Hub authentication** — set `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (a personal access token, not your password) to authenticate digest checks against Docker Hub. Anonymous access is rate limited per IP — currently 100 manifest requests per hour — and every tracked container costs one request per check, so enough containers or frequent enough checks will exhaust it. Authenticating raises the limit (closes #17)
+- **Rate-limit visibility** — the registry's remaining allowance is logged after each check, with a warning when fewer than 10 requests are left, and an explicit message naming the fix if a check is ever rejected with HTTP 429. Previously hitting the limit just looked like checks silently failing
+- Credentials are only ever sent to Docker Hub, never to GHCR, LSCR or any other registry, and are never written to `state.json` or the logs. If they're rejected, checks fall back to anonymous access rather than breaking
+
 ## [1.14.3] — 2026-07-26
 
 Follow-up to the v1.14.2 safety release, closing the gaps a second review found

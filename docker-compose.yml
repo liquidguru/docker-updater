@@ -27,3 +27,7 @@ services:
       - AUTH_PASSWORD=${AUTH_PASSWORD:-}
       # Optional; auto-generated under /app/data when blank.
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-}
+      # Optional Docker Hub auth: raises the anonymous per-IP rate limit on
+      # update checks. Use a personal access token, not your password.
+      - DOCKERHUB_USERNAME=${DOCKERHUB_USERNAME:-}
+      - DOCKERHUB_TOKEN=${DOCKERHUB_TOKEN:-}

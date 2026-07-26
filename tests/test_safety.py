@@ -499,6 +499,92 @@ class SelfUpdateBackupReservationTests(SafetyTestBase):
                         "unreserved orphan should still be cleaned up (baseline)")
 
 
+class RegistryAuthTests(SafetyTestBase):
+    """Docker Hub credentials for digest checks (issue #17)."""
+
+    def test_credentials_are_used_for_docker_hub(self):
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", "tok"):
+            self.assertEqual(
+                self.mod._registry_credentials("registry-1.docker.io"), ("user", "tok"))
+            self.assertEqual(
+                self.mod._registry_credentials("index.docker.io"), ("user", "tok"))
+
+    def test_credentials_are_not_sent_to_other_registries(self):
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", "tok"):
+            self.assertIsNone(self.mod._registry_credentials("ghcr.io"))
+            self.assertIsNone(self.mod._registry_credentials("lscr.io"))
+            self.assertIsNone(self.mod._registry_credentials("registry.example.com"))
+
+    def test_partial_credentials_are_ignored(self):
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", ""):
+            self.assertIsNone(self.mod._registry_credentials("registry-1.docker.io"))
+
+    def test_token_request_presents_credentials(self):
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None, auth=None, **kw):
+            captured["auth"] = auth
+            return mock.Mock(status_code=200, json=lambda: {"token": "abc"})
+
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", "tok"), \
+             mock.patch.object(self.mod.requests, "get", side_effect=fake_get):
+            token = self.mod._token_from_challenge(
+                'Bearer realm="https://auth.docker.io/token",service="registry.docker.io"',
+                "registry-1.docker.io")
+        self.assertEqual(token, "abc")
+        self.assertEqual(captured["auth"], ("user", "tok"))
+
+    def test_rejected_credentials_fall_back_to_anonymous(self):
+        """A bad token must not break update checks entirely."""
+        calls = []
+
+        def fake_get(url, params=None, timeout=None, auth=None, **kw):
+            calls.append(auth)
+            if auth is not None:
+                return mock.Mock(status_code=401, json=lambda: {})
+            return mock.Mock(status_code=200, json=lambda: {"token": "anon"})
+
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", "bad"), \
+             mock.patch.object(self.mod.requests, "get", side_effect=fake_get):
+            token = self.mod._token_from_challenge(
+                'Bearer realm="https://auth.docker.io/token"', "registry-1.docker.io")
+        self.assertEqual(token, "anon", "should retry anonymously after a 401")
+        self.assertEqual(calls, [("user", "bad"), None])
+
+    def test_secret_is_never_logged(self):
+        import io as _io
+        from contextlib import redirect_stdout
+
+        def fake_get(url, params=None, timeout=None, auth=None, **kw):
+            return mock.Mock(status_code=401, json=lambda: {})
+
+        buf = _io.StringIO()
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", "sup3rsecret"), \
+             mock.patch.object(self.mod.requests, "get", side_effect=fake_get), \
+             redirect_stdout(buf):
+            self.mod._token_from_challenge(
+                'Bearer realm="https://auth.docker.io/token"', "registry-1.docker.io")
+        self.assertNotIn("sup3rsecret", buf.getvalue())
+
+    def test_rate_limit_header_is_recorded(self):
+        self.mod._rate_limit_seen.clear()
+        resp = mock.Mock(headers={"RateLimit-Remaining": "76;w=21600",
+                                  "RateLimit-Limit": "100;w=21600"})
+        self.mod._note_rate_limit("registry-1.docker.io", resp)
+        self.assertEqual(self.mod._rate_limit_seen["registry-1.docker.io"], "76/100")
+
+    def test_missing_rate_limit_header_is_ignored(self):
+        self.mod._rate_limit_seen.clear()
+        self.mod._note_rate_limit("ghcr.io", mock.Mock(headers={}))
+        self.assertEqual(self.mod._rate_limit_seen, {})
+
+
 class HelperContainerFilterTests(SafetyTestBase):
     def test_helper_suffixes_are_recognised(self):
         self.assertTrue(self.mod._is_helper_container("web_old"))
