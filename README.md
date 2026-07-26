@@ -88,9 +88,10 @@ The WebUI supports **English** and **简体中文**:
 - **Safe recreation** — recreates containers using the Python Docker SDK (Watchtower pattern), preserving all original config: volumes, ports, environment variables, networks, static IPs, restart policy, capabilities, etc.
 - **Backup & rollback** — optionally keep the previous container after a successful update for a configurable window (Settings tab); roll back to it in one click if the new version misbehaves, or delete the backup early to reclaim space
 - **Image cleanup** — opt-in toggle to remove the superseded image after a successful update (backup-aware: never removed while a kept backup still references it). Plus a "Show reclaimable images" list in Settings — see every dangling image with its repository name, size, and age, select individual ones or all, and delete on demand; runs as a background job so a large batch can't be cut short by a proxy timeout, and any image that's still referenced is skipped with the actual blocking container named, not a generic error
-- **Safe backups** — backup containers (`{name}_old`) have their restart policy set to `no` automatically, so a host reboot never starts both the live container and its backup simultaneously; the original policy is restored on rollback
-- **Crash-safe** — if docker-updater is restarted mid-update/rollback, it reconciles leftover backups on startup and restores any service left down
-- **`_old` containers hidden** — backup containers created by docker-updater are excluded from the update list and registry checks
+- **Health-verified updates** — a replacement is polled a few times before the container it replaced is discarded; `restarting` is treated as a crash loop rather than success, and if the image defines a HEALTHCHECK that hasn't passed yet the old container is retained as a backup instead of being removed
+- **Safe backups** — backup containers (`{name}_old`) have their restart policy set to `no` automatically, so a host reboot never starts both the live container and its backup simultaneously; the original policy is restored on rollback, and reset again if a rollback has to be undone
+- **Crash-safe** — if docker-updater is restarted mid-update/rollback, it reconciles leftovers on startup and restores any service left down
+- **Helper containers hidden** — the containers docker-updater creates during an operation (`{name}_old` backups and `{name}_rollingback`) are excluded from the update list, registry checks and the dashboard
 - **Multi-arch image** — published for `linux/amd64` and `linux/arm64`, so it runs on x86 servers and ARM boards (Raspberry Pi, etc.)
 - **Locally-built images skipped** — containers with no `RepoDigests` (built from local Dockerfiles) are automatically ignored
 - **Persistent state** — update history, deferred decisions, and last-check timestamps survive container restarts
@@ -325,8 +326,8 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
    - Stops the old container and renames it to `{name}_old` (kept as a rollback target)
    - Creates and starts the new container with identical config using the Docker SDK low-level API (Watchtower pattern)
    - Reconnects all networks via `NetworkConnect`, preserving static IP assignments, aliases, and iptables setup
-   - Waits 2 seconds and checks the new container is still running
-   - **On success**: removes the `_old` container — or, with backup retention enabled, keeps it for the configured window so you can still roll back later (see [Backup & rollback](#backup--rollback))
+   - Polls the new container a few times to confirm it actually stayed up — `restarting` counts as a crash loop, not success — and waits for a `healthy` result if the image defines a HEALTHCHECK
+   - **On success**: removes the `_old` container — or keeps it for the configured window if backup retention is enabled, *or* if the health check hasn't confirmed yet (see [Backup & rollback](#backup--rollback))
    - **On failure**: removes the failed new container, renames `_old` back, and restarts the previous version
 
 Container state (update availability, defer decisions, history, backups) is persisted to `data/state.json`.
@@ -355,10 +356,14 @@ Backup containers have their restart policy set to `no` the moment they are crea
 
 Updates and rollbacks run in a background thread. If docker-updater is restarted *while one is in progress* (a manual restart, a host reboot, even its own self-update), that thread is killed mid-flight — which could otherwise leave a container half-updated or stopped.
 
-To guard against this, docker-updater scans for leftover `{name}_old` backup containers on every startup and reconciles each one:
+To guard against this, docker-updater reconciles leftovers on every startup.
+
+Leftover `{name}_old` backup containers (from an interrupted **update**):
 
 - **New container is running** → it's kept; the backup is preserved (if retention is on) or cleaned up (if off).
 - **Primary is missing or not running** → the previous version is automatically restored from the backup and started.
+
+Leftover `{name}_rollingback` containers (from an interrupted **rollback**): during a rollback the outgoing container is parked under this name while the backup takes over, so a crash in that window can leave nothing serving the real name. Startup recovery restores the parked container — but only when no container currently holds that name, so it can never fight a container that's already running.
 
 So an interrupted operation self-heals on the next start instead of leaving a service down.
 
