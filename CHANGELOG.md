@@ -2,18 +2,7 @@
 
 All notable changes to docker-updater are documented here.
 
-## [1.14.0] — 2026-07-21
-
-### Added
-- **Bilingual documentation** — added a complete Simplified Chinese README with reciprocal language links and synchronized setup, authentication, language, and deployment guidance
-- **Chinese / English UI** — localized dashboard, settings, cards, dialogs, login, and empty states. Auto follows the browser; Settings → Language can force English or 中文. The effective language also controls scheduled and GitHub push-notification wording
-- **Custom dialogs** — replaced browser `alert`/`confirm` with theme-aware, keyboard-accessible project modals
-- **Optional login** — set `AUTH_USERNAME` and `AUTH_PASSWORD` to require sign-in with a 7-day session; open access remains the default when both are unset
-
-### Fixed
-- **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
-
-## [1.15.1] — 2026-07-27
+## [1.15.1] — 2026-07-28
 
 ### Fixed
 - **Containers whose image is written `docker.io/...` were silently skipped** — only `registry-1.docker.io` serves the Registry v2 API, but an image reference spelled with an explicit `docker.io/` prefix (as Compose files often do) was passed through as the registry host. The digest lookup then failed, and because a container with no resolvable digest is dropped from the update list, it simply appeared under **Unchecked** with no explanation. `docker.io`, `index.docker.io` and `registry.hub.docker.com` are now all normalised to the API host (closes #19)
@@ -59,6 +48,17 @@ failure-injection tests.
 ### Fixed
 - **Single-source translations** — the client-side catalog in `static/i18n.js` was a hand-maintained copy of `static/i18n_messages.json`, with no generator keeping the two in sync. `app.py` now loads the JSON once and injects it into both `templates/index.html` and `templates/login.html` via Jinja `{{ i18n_messages | tojson }}`, so `i18n.js` has no embedded strings left — the two catalogs can no longer drift apart
 - **Authentication setup guidance** — the README's Compose auth example didn't make clear that a `.env` file only supplies `${VAR}` substitution values and doesn't automatically inject them into the container's environment. Docs now show the full `environment:` mapping, forced-recreate instructions, and a verification snippet (`docker compose exec ... test -n "$AUTH_USERNAME"`) to confirm the variables actually reached the container before relying on them (thanks @Warm-winter)
+
+## [1.14.0] — 2026-07-21
+
+### Added
+- **Bilingual documentation** — added a complete Simplified Chinese README with reciprocal language links and synchronized setup, authentication, language, and deployment guidance
+- **Chinese / English UI** — localized dashboard, settings, cards, dialogs, login, and empty states. Auto follows the browser; Settings → Language can force English or 中文. The effective language also controls scheduled and GitHub push-notification wording
+- **Custom dialogs** — replaced browser `alert`/`confirm` with theme-aware, keyboard-accessible project modals
+- **Optional login** — set `AUTH_USERNAME` and `AUTH_PASSWORD` to require sign-in with a 7-day session; open access remains the default when both are unset
+
+### Fixed
+- **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
 ## [1.13.0] — 2026-07-15
 
