@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.0"
+APP_VERSION          = "1.15.1"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -919,6 +919,13 @@ MANIFEST_ACCEPT = ", ".join([
 ])
 
 
+# Only registry-1.docker.io serves the Registry v2 API; the other spellings are
+# how people write Docker Hub in image references and must be normalised to it.
+_DOCKERHUB_API_HOST = "registry-1.docker.io"
+_DOCKERHUB_ALIASES = ("docker.io", "index.docker.io", "registry.hub.docker.com",
+                      _DOCKERHUB_API_HOST)
+
+
 def parse_image(image_name: str) -> tuple[str, str, str]:
     tag = "latest"
     name = image_name
@@ -932,8 +939,17 @@ def parse_image(image_name: str) -> tuple[str, str, str]:
         registry = first
         repo = "/".join(parts[1:])
     else:
-        registry = "registry-1.docker.io"
-        repo = name if "/" in name else f"library/{name}"
+        registry = _DOCKERHUB_API_HOST
+        repo = name
+    # Docker Hub can be written several ways, but only registry-1.docker.io
+    # serves the v2 API — `docker.io/...` (as Compose files often spell it)
+    # would 404 and the container was then dropped from the list entirely
+    # rather than reported (issue #19). Official images also need the implicit
+    # `library/` namespace, whichever spelling was used.
+    if registry.lower() in _DOCKERHUB_ALIASES:
+        registry = _DOCKERHUB_API_HOST
+    if registry == _DOCKERHUB_API_HOST and "/" not in repo:
+        repo = f"library/{repo}"
     return registry, repo, tag
 
 
@@ -973,9 +989,6 @@ def _manifest_matches_platform(manifest: dict, platform: dict | None) -> bool:
     return True
 
 
-_DOCKERHUB_HOSTS = ("registry-1.docker.io", "index.docker.io", "docker.io")
-
-
 def _registry_credentials(registry: str | None) -> tuple[str, str] | None:
     """Credentials to authenticate a registry token request, if configured.
 
@@ -984,7 +997,7 @@ def _registry_credentials(registry: str | None) -> tuple[str, str] | None:
     check (issue #17). Structured so other registries can be added without
     touching the callers.
     """
-    if registry and registry.lower() in _DOCKERHUB_HOSTS:
+    if registry and registry.lower() in _DOCKERHUB_ALIASES:
         if DOCKERHUB_USERNAME and DOCKERHUB_TOKEN:
             return DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
     return None

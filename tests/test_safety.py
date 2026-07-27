@@ -499,6 +499,66 @@ class SelfUpdateBackupReservationTests(SafetyTestBase):
                         "unreserved orphan should still be cleaned up (baseline)")
 
 
+class ImageReferenceParsingTests(SafetyTestBase):
+    """Docker Hub can be spelled several ways, but only registry-1.docker.io
+    serves the v2 API. Getting this wrong made the digest check fail, and the
+    container was then dropped from the update list entirely (issue #19)."""
+
+    def test_dockerhub_aliases_normalise_to_the_api_host(self):
+        for ref in ("searxng/searxng:latest",
+                    "docker.io/searxng/searxng:latest",
+                    "index.docker.io/searxng/searxng:latest",
+                    "registry.hub.docker.com/searxng/searxng:latest",
+                    "registry-1.docker.io/searxng/searxng:latest"):
+            registry, repo, tag = self.mod.parse_image(ref)
+            self.assertEqual(registry, "registry-1.docker.io", ref)
+            self.assertEqual(repo, "searxng/searxng", ref)
+            self.assertEqual(tag, "latest", ref)
+
+    def test_official_images_get_the_library_namespace_for_every_spelling(self):
+        for ref in ("nginx:latest", "docker.io/nginx:latest",
+                    "index.docker.io/nginx:latest"):
+            registry, repo, _ = self.mod.parse_image(ref)
+            self.assertEqual(registry, "registry-1.docker.io", ref)
+            self.assertEqual(repo, "library/nginx", ref)
+
+    def test_library_namespace_is_not_doubled(self):
+        _, repo, _ = self.mod.parse_image("docker.io/library/nginx:latest")
+        self.assertEqual(repo, "library/nginx")
+
+    def test_other_registries_are_left_alone(self):
+        cases = {
+            "ghcr.io/home-assistant/home-assistant:stable":
+                ("ghcr.io", "home-assistant/home-assistant", "stable"),
+            "lscr.io/linuxserver/calibre-web:latest":
+                ("lscr.io", "linuxserver/calibre-web", "latest"),
+            "localhost:5000/myapp:1.0": ("localhost:5000", "myapp", "1.0"),
+            "registry.example.com/team/app:v2":
+                ("registry.example.com", "team/app", "v2"),
+        }
+        for ref, expected in cases.items():
+            self.assertEqual(self.mod.parse_image(ref), expected, ref)
+
+    def test_no_library_namespace_added_for_other_registries(self):
+        """`localhost:5000/myapp` must not become `library/myapp`."""
+        _, repo, _ = self.mod.parse_image("localhost:5000/myapp:1.0")
+        self.assertEqual(repo, "myapp")
+
+    def test_tag_defaults_and_ports_do_not_confuse_the_split(self):
+        self.assertEqual(self.mod.parse_image("nginx"),
+                         ("registry-1.docker.io", "library/nginx", "latest"))
+        self.assertEqual(self.mod.parse_image("localhost:5000/myapp"),
+                         ("localhost:5000", "myapp", "latest"))
+
+    def test_credentials_follow_every_dockerhub_spelling(self):
+        with mock.patch.object(self.mod, "DOCKERHUB_USERNAME", "user"), \
+             mock.patch.object(self.mod, "DOCKERHUB_TOKEN", "tok"):
+            for host in ("registry-1.docker.io", "docker.io", "index.docker.io",
+                         "registry.hub.docker.com"):
+                self.assertEqual(self.mod._registry_credentials(host),
+                                 ("user", "tok"), host)
+
+
 class RegistryAuthTests(SafetyTestBase):
     """Docker Hub credentials for digest checks (issue #17)."""
 

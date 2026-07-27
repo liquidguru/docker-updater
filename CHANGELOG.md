@@ -13,6 +13,13 @@ All notable changes to docker-updater are documented here.
 ### Fixed
 - **Complete Docker image assets** — copy `static/` into the image so favicon and i18n files are available in image-only deployments
 
+## [1.15.1] — 2026-07-27
+
+### Fixed
+- **Containers whose image is written `docker.io/...` were silently skipped** — only `registry-1.docker.io` serves the Registry v2 API, but an image reference spelled with an explicit `docker.io/` prefix (as Compose files often do) was passed through as the registry host. The digest lookup then failed, and because a container with no resolvable digest is dropped from the update list, it simply appeared under **Unchecked** with no explanation. `docker.io`, `index.docker.io` and `registry.hub.docker.com` are now all normalised to the API host (closes #19)
+- **Official images with an explicit registry prefix resolved to the wrong repository** — `docker.io/nginx` was looked up as `nginx` rather than `library/nginx`, so it failed for the same reason. The implicit `library/` namespace is now applied for every Docker Hub spelling, without doubling it when it's already present
+- Docker Hub credentials (v1.15.0) now apply to all of those spellings too, not just the bare form
+
 ## [1.15.0] — 2026-07-27
 
 ### Added
