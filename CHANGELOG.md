@@ -2,6 +2,13 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.2] — 2026-08-03
+
+### Fixed
+- **Deferred containers no longer appear in update notifications** — deferring a container moved it to the Deferred tab but had no effect on the scheduled ntfy notification, so it was still listed as an available update every day. The notification list now applies the same active-deferral rule the dashboard uses, so deferring really does mean "stop telling me about this one". Deferrals still expire exactly as before, and the container starts being reported again the day the deferral lapses. If every available update is deferred, no notification is sent at all rather than an empty one. Applies to remote hosts as well as the local one (closes #20)
+
+  **If your notifications suddenly look shorter, this is why.** Deferred containers are no longer listed by name, but the notification says how many are being held back — e.g. `api, db` followed by `(2 deferred, not shown)` — so nothing you deferred months ago quietly disappears. They remain listed in full on the **Deferred** tab. This applies to everyone; there's no setting to turn it off, because a deferral that still notifies you isn't really a deferral. If you actively want the old behaviour, open an issue and say why — it's easy to add a toggle, and worth doing if there's a real use for it.
+
 ## [1.15.1] — 2026-07-28
 
 ### Fixed

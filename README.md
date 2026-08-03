@@ -72,7 +72,7 @@ The WebUI supports **English** and **简体中文**:
 - **Registry polling** — compares local image digests against the registry without pulling, using the Docker Registry v2 manifest API (`HEAD` + `Docker-Content-Digest`)
 - **Multi-registry support** — Docker Hub, GHCR (`ghcr.io`), LinuxServer (`lscr.io`), and any registry that implements the Bearer token challenge
 - **Multi-host support** — manage containers across multiple Docker hosts (SSH or TCP) from a single dashboard; SSH host keys are auto-accepted on first Test Connection (TOFU) and persisted across restarts; each host has a connection health indicator and containers are shown together with a host chip
-- **Per-container control** — update individually, defer for 7/14/30/90 days or indefinitely, or un-defer at any time
+- **Per-container control** — update individually, defer for 7/14/30/90 days or indefinitely, or un-defer at any time. A deferred container stops appearing in update notifications until the deferral expires (the notification says how many are being held back, so nothing goes quietly missing)
 - **Bulk updates** — select multiple containers and update them all at once
 - **Changelog viewer** — fetches the last 5 GitHub Releases and renders them inline; works automatically for images with an `org.opencontainers.image.source` label or hosted on GHCR (`ghcr.io`); for anything else a *Set changelog source…* prompt lets you pin a GitHub repo URL, pre-filled with a best guess from the image name
 - **Live update log** — streaming log modal shows pull progress and recreation status in real time; auto-reconnects if you refresh the page mid-update

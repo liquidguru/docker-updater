@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.1"
+APP_VERSION          = "1.15.2"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1206,6 +1206,16 @@ def check_for_updates(notify: bool = False) -> None:
 
     # Collect all updates for notification: list of (host_label, container_name)
     all_updates: list[tuple[str | None, str]] = []
+    # Deferring a container should mean "stop telling me about this one", not
+    # just move it to another tab — so the notification list uses the same
+    # active-deferral rule as the dashboard (issue #20). Deferrals still expire
+    # normally, at which point the container starts being reported again.
+    _today = datetime.date.today().isoformat()
+    deferred_count = 0
+
+    def _not_deferred(deferred: dict, name: str) -> bool:
+        d = (deferred or {}).get(name)
+        return not (d and d.get("until", "") > _today)
 
     try:
         # ── Local host (existing behaviour, completely unchanged) ─────────────
@@ -1217,9 +1227,14 @@ def check_for_updates(notify: bool = False) -> None:
                 state["available"] = local_available
                 state["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
                 save_state(state)
+            _local_deferred = state.get("deferred", {})
             updates = [n for n, v in local_available.items() if v["has_update"]]
-            all_updates.extend([(None, n) for n in updates])
-            print(f"[checker:local] Done — {len(updates)} update(s).")
+            notify_updates = [n for n in updates if _not_deferred(_local_deferred, n)]
+            all_updates.extend([(None, n) for n in notify_updates])
+            _held = len(updates) - len(notify_updates)
+            deferred_count += _held
+            print(f"[checker:local] Done — {len(updates)} update(s)."
+                  + (f" {_held} deferred, not notified." if _held else ""))
         except Exception as e:
             print(f"[checker:local] Fatal: {e}")
 
@@ -1238,8 +1253,13 @@ def check_for_updates(notify: bool = False) -> None:
                 hs.pop("last_error", None)
                 save_host_state(host_id, hs)
                 updates = [n for n, v in available.items() if v["has_update"]]
-                all_updates.extend([(host_name, n) for n in updates])
-                print(f"[checker:{host_id}] Done — {len(updates)} update(s).")
+                notify_updates = [n for n in updates
+                                  if _not_deferred(hs.get("deferred", {}), n)]
+                all_updates.extend([(host_name, n) for n in notify_updates])
+                _held = len(updates) - len(notify_updates)
+                deferred_count += _held
+                print(f"[checker:{host_id}] Done — {len(updates)} update(s)."
+                      + (f" {_held} deferred, not notified." if _held else ""))
             except Exception as e:
                 print(f"[checker:{host_id}] Offline: {e}")
                 hs = load_host_state(host_id)
@@ -1266,6 +1286,11 @@ def check_for_updates(notify: bool = False) -> None:
                     f"{hl}: {', '.join(sorted(names))}"
                     for hl, names in by_host.items()
                 )
+            # Deferred containers aren't listed, but say how many are being held
+            # back — otherwise a shorter notification looks like updates went
+            # missing, and something deferred months ago becomes invisible.
+            if deferred_count:
+                body += "\n" + ui_t("notify.deferred_held", count=deferred_count)
             send_notification(
                 title=(ui_t("notify.updates_title_plural", count=count) if count != 1 else ui_t("notify.updates_title", count=count)),
                 body=body,

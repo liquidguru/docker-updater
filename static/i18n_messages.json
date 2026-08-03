@@ -253,7 +253,8 @@
     "webhook.pushed_many": "{user} pushed {count} commits",
     "select.none_selected": "0 selected",
     "btn.update_selected_none": "Update Selected (0)",
-    "notify.local_host": "Local"
+    "notify.local_host": "Local",
+    "notify.deferred_held": "({count} deferred, not shown)"
   },
   "zh-CN": {
     "app.title": "Docker Updater",
@@ -509,6 +510,7 @@
     "webhook.pushed_many": "{user} 推送了 {count} 个提交",
     "select.none_selected": "已选 0 个",
     "btn.update_selected_none": "更新所选（0）",
-    "notify.local_host": "本地"
+    "notify.local_host": "本地",
+    "notify.deferred_held": "（另有 {count} 个已暂缓，未列出）"
   }
 }

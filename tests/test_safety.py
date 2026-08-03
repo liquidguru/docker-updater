@@ -499,6 +499,95 @@ class SelfUpdateBackupReservationTests(SafetyTestBase):
                         "unreserved orphan should still be cleaned up (baseline)")
 
 
+class DeferredNotificationTests(SafetyTestBase):
+    """Deferring a container must stop it being notified about, not just move
+    it to another tab (issue #20)."""
+
+    def _check(self, available, deferred, hosts=()):
+        """Run check_for_updates and return the notification body it built."""
+        mod = self.mod
+        self.state = {"available": {}, "deferred": deferred, "history": [],
+                      "rollbacks": {}, "backup_hours": 24}
+        sent = {}
+
+        def fake_notify(title, body, **kw):
+            sent["title"], sent["body"] = title, body
+
+        with mock.patch.object(mod.docker, "from_env", return_value=mock.Mock()), \
+             mock.patch.object(mod, "_scan_host", return_value=available), \
+             mock.patch.object(mod, "load_state", side_effect=lambda: self.state), \
+             mock.patch.object(mod, "save_state",
+                               side_effect=lambda s: setattr(self, "state", s)), \
+             mock.patch.object(mod, "load_hosts", return_value=list(hosts)), \
+             mock.patch.object(mod, "send_notification", side_effect=fake_notify), \
+             mock.patch.object(mod, "_rate_limit_seen", {}):
+            mod.check_for_updates(notify=True)
+        return sent
+
+    @staticmethod
+    def _day(offset):
+        import datetime as _dt
+        return (_dt.date.today() + _dt.timedelta(days=offset)).isoformat()
+
+    def test_actively_deferred_container_is_not_notified(self):
+        sent = self._check(
+            available={"web": {"has_update": True}, "db": {"has_update": True}},
+            deferred={"web": {"until": self._day(7)}},
+        )
+        self.assertIn("db", sent.get("body", ""))
+        self.assertNotIn("web", sent.get("body", ""),
+                         "a deferred container was still reported")
+
+    def test_expired_deferral_is_notified_again(self):
+        sent = self._check(
+            available={"web": {"has_update": True}},
+            deferred={"web": {"until": self._day(-1)}},
+        )
+        self.assertIn("web", sent.get("body", ""),
+                      "an expired deferral should stop suppressing the container")
+
+    def test_deferral_expiring_today_is_notified(self):
+        """The UI treats `until <= today` as expired; the notification path must
+        use the same boundary or the two disagree for a day."""
+        sent = self._check(
+            available={"web": {"has_update": True}},
+            deferred={"web": {"until": self._day(0)}},
+        )
+        self.assertIn("web", sent.get("body", ""))
+
+    def test_notification_reports_how_many_are_deferred(self):
+        """Otherwise a shorter notification looks like updates went missing, and
+        something deferred long ago becomes invisible."""
+        sent = self._check(
+            available={"web": {"has_update": True}, "db": {"has_update": True},
+                       "cache": {"has_update": True}},
+            deferred={"web": {"until": self._day(7)}, "cache": {"until": self._day(90)}},
+        )
+        self.assertIn("db", sent.get("body", ""))
+        self.assertIn("2", sent.get("body", ""),
+                      f"should say how many are held back: {sent.get('body')!r}")
+
+    def test_no_deferred_note_when_nothing_is_deferred(self):
+        sent = self._check(available={"db": {"has_update": True}}, deferred={})
+        self.assertNotIn("deferred", sent.get("body", "").lower(),
+                         "shouldn't mention deferrals when there are none")
+
+    def test_no_notification_when_every_update_is_deferred(self):
+        sent = self._check(
+            available={"web": {"has_update": True}},
+            deferred={"web": {"until": self._day(30)}},
+        )
+        self.assertEqual(sent, {}, "should stay silent rather than send an empty list")
+
+    def test_containers_without_updates_are_unaffected(self):
+        sent = self._check(
+            available={"web": {"has_update": False}, "db": {"has_update": True}},
+            deferred={},
+        )
+        self.assertIn("db", sent.get("body", ""))
+        self.assertNotIn("web", sent.get("body", ""))
+
+
 class ImageReferenceParsingTests(SafetyTestBase):
     """Docker Hub can be spelled several ways, but only registry-1.docker.io
     serves the v2 API. Getting this wrong made the digest check fail, and the
