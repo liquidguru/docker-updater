@@ -9,3 +9,6 @@ __pycache__/
 # Synology DSM artifacts
 @eaDir/
 **/@eaDir/
+
+# Local type-checking venv (see pyrightconfig.json)
+.venv/

@@ -2,11 +2,14 @@
   // Type-checking config for editors / language servers (pyright, pylance).
   // Not part of the build — the container runs plain `python app.py`.
   //
-  // Targets the same interpreter as the image (python:3.11-slim). Run with the
-  // project's deps installed, or every `flask.*` / `docker.*` access reports as
-  // an error and the output is worthless:
-  //   python -m venv .venv && .venv/bin/pip install -r requirements.txt
+  // Targets the same interpreter as the image (python:3.11-slim), and resolves
+  // imports against ./.venv. That venv is REQUIRED — without the project's deps
+  // installed, every `flask.*` / `docker.*` access reports as an error and the
+  // output is worthless (~70 bogus errors). It's gitignored, so recreate with:
+  //   python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 
+  "venvPath": ".",
+  "venv": ".venv",
   "pythonVersion": "3.11",
   "typeCheckingMode": "basic",
 
