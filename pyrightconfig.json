@@ -1,0 +1,40 @@
+{
+  // Type-checking config for editors / language servers (pyright, pylance).
+  // Not part of the build — the container runs plain `python app.py`.
+  //
+  // Targets the same interpreter as the image (python:3.11-slim). Run with the
+  // project's deps installed, or every `flask.*` / `docker.*` access reports as
+  // an error and the output is worthless:
+  //   python -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+
+  "include": ["app.py"],
+  "exclude": ["**/__pycache__", "data", "tests"],
+
+  // ── Downgraded to warning: driven by docker-py's incomplete type stubs, ─────
+  // not by real defects. Kept visible rather than silenced so a genuine one
+  // still shows up — just not as an error.
+
+  // `docker.errors` / `docker.types` aren't re-exported from `docker/__init__`,
+  // so every `docker.errors.NotFound` reads as an unknown attribute.
+  "reportAttributeAccessIssue": "warning",
+
+  // The stubs type `Container.name`, `.id`, `.attrs` etc. as Optional, though
+  // docker-py raises rather than returning None. See _is_helper_container.
+  "reportOptionalMemberAccess": "warning",
+  "reportOptionalSubscript": "warning",
+
+  // `APIClient.update_container` really does accept a container-id str; the
+  // stub insists on a _Container object.
+  "reportArgumentType": "warning",
+
+  // ── Kept as errors: these would be real bugs in our own code. ──────────────
+  "reportUndefinedVariable": "error",
+  "reportPossiblyUnboundVariable": "error",
+  "reportSelfClsParameterName": "error",
+  "reportRedeclaration": "error",
+  "reportIndexIssue": "error",
+  "reportCallIssue": "error"
+}

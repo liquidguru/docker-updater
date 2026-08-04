@@ -434,7 +434,7 @@ def _mounts_from_hcfg(hcfg: dict):
     return out or None
 
 
-def _human_size(n: int) -> str:
+def _human_size(n: float) -> str:
     n = float(n or 0)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
