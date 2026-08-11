@@ -58,6 +58,8 @@ Successful setup logs `[auth] Login required (user='admin')`; `[auth] Open acces
 
 Use the exact filename `.env` (not `.env.txt`), avoid spaces around `=`, protect it with `chmod 600 .env`, and never publish its contents. Sessions last **7 days**. `/webhook/github` remains reachable without a login and still relies on `GITHUB_WEBHOOK_SECRET`. Put the WebUI behind HTTPS when exposing it publicly.
 
+> **Changing the password does not log existing sessions out.** Sessions are signed with `FLASK_SECRET_KEY`, not derived from the password, so a session issued before a password change stays valid until it expires (up to 7 days). If you're changing the password because you think it leaked, rotate the signing key at the same time to invalidate every existing session — either set a new `FLASK_SECRET_KEY`, or delete `data/.secret_key` so a fresh one is generated — then recreate the container.
+
 ## Language
 
 The WebUI supports **English** and **简体中文**:

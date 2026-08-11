@@ -59,6 +59,8 @@ docker compose logs --tail=100 docker-updater
 
 文件名必须是 `.env` 而不是 `.env.txt`，等号两侧不要加空格；可执行 `chmod 600 .env` 限制权限，并且不要公开文件内容。会话有效期为 **7 天**。`/webhook/github` 无需登录即可访问，但仍依赖 `GITHUB_WEBHOOK_SECRET`。将 WebUI 暴露到公网时，请在前端配置 HTTPS。
 
+> **修改密码不会使已有会话失效。** 会话由 `FLASK_SECRET_KEY` 签名，与密码无关，因此在修改密码之前签发的会话仍然有效，直到过期（最长 7 天）。如果你是因为怀疑密码泄露而修改密码，请同时轮换签名密钥以使所有现有会话失效：设置新的 `FLASK_SECRET_KEY`，或删除 `data/.secret_key` 让程序重新生成，然后重建容器。
+
 ## 语言
 
 WebUI 支持 **English** 和 **简体中文**：
