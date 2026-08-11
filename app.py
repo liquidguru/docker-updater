@@ -2171,6 +2171,7 @@ def login():
         password = request.form.get("password", "")
         if _const_eq(username, AUTH_USERNAME) and _const_eq(password, AUTH_PASSWORD):
             session.clear()
+            session["_sid"] = os.urandom(16).hex()
             session.permanent = True
             session["authenticated"] = True
             return redirect(_safe_next_path(request.args.get("next")))
