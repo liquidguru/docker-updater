@@ -867,13 +867,16 @@ def _load_i18n_messages() -> dict:
     if _I18N_MESSAGES is not None:
         return _I18N_MESSAGES
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "i18n_messages.json")
+    # Build into a local first: assigning the Optional global inside try/except
+    # leaves a type checker unable to prove the return is non-None.
     try:
         with open(path, "r", encoding="utf-8") as f:
-            _I18N_MESSAGES = json.load(f)
+            messages = json.load(f)
     except Exception as e:
         print(f"[i18n] Could not load messages: {e}")
-        _I18N_MESSAGES = {"en": {}, "zh-CN": {}}
-    return _I18N_MESSAGES
+        messages = {"en": {}, "zh-CN": {}}
+    _I18N_MESSAGES = messages
+    return messages
 
 
 def get_ui_lang() -> str:
@@ -1586,6 +1589,9 @@ def apply_update(container_name: str, host_id: str = "local",
             # positively confirm the new one is healthy — never remove the only
             # way back on the strength of an unproven replacement.
             _keep_backup = _backup_enabled or not _health_ok
+            # Bound unconditionally: it is only read when _keep_backup is true,
+            # but that correlation isn't provable by a type checker.
+            _expires = None
             if _keep_backup:
                 _expires = (datetime.datetime.utcnow() + datetime.timedelta(hours=_backup_hours)).isoformat() + "Z"
                 if _backup_enabled:
