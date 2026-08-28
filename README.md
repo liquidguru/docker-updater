@@ -273,13 +273,29 @@ All containers from all hosts then appear together in the Updates/Deferred/Up to
 
 Accepted host keys are stored in `data/known_hosts` inside your data volume, so they survive container restarts and upgrades automatically.
 
-If you prefer to manage SSH keys yourself (e.g. to pin specific keys or share a known_hosts from your host machine), you can mount your existing `~/.ssh` directory into the container:
+If you prefer to manage SSH keys yourself (e.g. to pin specific keys, or reuse the `Host` entries and `known_hosts` from your host machine), you can mount your existing `~/.ssh` directory into the container:
 
 ```yaml
 volumes:
   - /var/run/docker.sock:/var/run/docker.sock
   - ./data:/app/data
   - ~/.ssh:/root/.ssh:ro   # optional — mounts host SSH config/keys
+```
+
+**Your mounted config is never modified.** If `~/.ssh/config` already exists, docker-updater leaves it exactly as-is and uses it. It only writes a config when there isn't one — the default case, where nothing is mounted.
+
+One consequence worth knowing: SSH then uses whatever `UserKnownHostsFile` your own config specifies (or `~/.ssh/known_hosts` if it specifies none), rather than `data/known_hosts`. If that path is read-only, host keys accepted via **Test Connection** can't be saved, and you'll want either an entry for the host in your existing `known_hosts` already, or this in your config:
+
+```
+Host *
+    UserKnownHostsFile /app/data/known_hosts
+```
+
+The startup log states which is in effect:
+
+```
+[ssh] Persistent known_hosts: /app/data/known_hosts     # our config, default case
+[ssh] Using the existing /root/.ssh/config as-is (not overwritten).
 ```
 
 ---

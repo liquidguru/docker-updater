@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.2"
+APP_VERSION          = "1.15.3"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -302,23 +302,59 @@ def get_docker_client(url: str | None = None, timeout: int = 300):
 
 
 def _setup_ssh_config() -> None:
-    """Write ~/.ssh/config at startup so the system SSH binary uses
-    /app/data/known_hosts as its UserKnownHostsFile. This persists accepted
-    host keys across container restarts via the data volume."""
-    ssh_dir = os.path.expanduser("~/.ssh")
-    os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+    """Point the system SSH client at a known_hosts file on the data volume, so
+    accepted host keys survive container restarts.
+
+    Two things this must never do, both reported in #22: crash startup, and
+    overwrite a config the operator supplied. `~/.ssh` is commonly bind-mounted
+    to provide keys and Host entries — read-only, in which case writing raised
+    OSError and killed the container before it served anything; or read-write,
+    in which case we clobbered their config and destroyed their host mappings.
+    """
     known_hosts = os.path.join(DATA_DIR, "known_hosts")
+    try:
+        if not os.path.exists(known_hosts):
+            open(known_hosts, "w").close()
+            os.chmod(known_hosts, 0o600)
+    except Exception as e:
+        print(f"[ssh] WARNING: could not create {known_hosts}: {e}")
+
+    ssh_dir = os.path.expanduser("~/.ssh")
     config_path = os.path.join(ssh_dir, "config")
-    with open(config_path, "w") as f:
-        f.write(
-            f"Host *\n"
-            f"    UserKnownHostsFile {known_hosts}\n"
-            f"    StrictHostKeyChecking yes\n"
-        )
-    if not os.path.exists(known_hosts):
-        open(known_hosts, "w").close()
-        os.chmod(known_hosts, 0o600)
-    print(f"[ssh] Persistent known_hosts: {known_hosts}")
+
+    # An existing config is the operator's, not ours — leave it alone.
+    if os.path.exists(config_path):
+        try:
+            with open(config_path) as f:
+                existing = f.read()
+        except Exception:
+            existing = ""
+        print(f"[ssh] Using the existing {config_path} as-is (not overwritten).")
+        if "UserKnownHostsFile" not in existing:
+            print(f"[ssh] Note: it doesn't set UserKnownHostsFile, so SSH will use "
+                  f"~/.ssh/known_hosts rather than {known_hosts}. Host keys accepted "
+                  f"via Test Connection won't persist unless that path is writable. "
+                  f"To use the data volume instead, add to your config:")
+            print(f"[ssh]     Host *")
+            print(f"[ssh]         UserKnownHostsFile {known_hosts}")
+        return
+
+    try:
+        os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+        with open(config_path, "w") as f:
+            f.write(
+                f"Host *\n"
+                f"    UserKnownHostsFile {known_hosts}\n"
+                f"    StrictHostKeyChecking yes\n"
+            )
+        print(f"[ssh] Persistent known_hosts: {known_hosts}")
+    except OSError as e:
+        # Almost always a read-only bind mount of ~/.ssh. Not fatal: SSH will
+        # fall back to whatever the mount provides.
+        print(f"[ssh] Could not write {config_path} ({e.strerror or e}).")
+        print(f"[ssh] Continuing — SSH will use the mounted directory as-is. "
+              f"If remote hosts fail to verify, add a 'UserKnownHostsFile' line "
+              f"to your own config, or mount ~/.ssh read-write.")
 
 
 def _ssh_keyscan_and_accept(url: str) -> bool:

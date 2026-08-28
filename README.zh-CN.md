@@ -283,6 +283,22 @@ volumes:
   - ~/.ssh:/root/.ssh:ro   # 可选：挂载宿主机的 SSH 配置和密钥
 ```
 
+**挂载进来的配置文件不会被修改。** 如果 `~/.ssh/config` 已存在，docker-updater 会原样保留并直接使用；只有在该文件不存在时（即未挂载的默认情况）才会写入自己的配置。
+
+由此带来的一个影响：SSH 将使用你自己配置中指定的 `UserKnownHostsFile`（若未指定则为 `~/.ssh/known_hosts`），而不是 `data/known_hosts`。如果该路径是只读的，通过 **测试连接** 接受的主机密钥将无法保存；此时请确保你现有的 `known_hosts` 中已包含该主机，或在配置中加入：
+
+```
+Host *
+    UserKnownHostsFile /app/data/known_hosts
+```
+
+启动日志会说明当前生效的是哪一种：
+
+```
+[ssh] Persistent known_hosts: /app/data/known_hosts     # 默认情况，使用我们写入的配置
+[ssh] Using the existing /root/.ssh/config as-is (not overwritten).
+```
+
 ---
 
 ## 推送通知

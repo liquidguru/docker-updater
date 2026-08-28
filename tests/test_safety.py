@@ -499,6 +499,66 @@ class SelfUpdateBackupReservationTests(SafetyTestBase):
                         "unreserved orphan should still be cleaned up (baseline)")
 
 
+class SshConfigSetupTests(SafetyTestBase):
+    """`~/.ssh` is commonly bind-mounted to supply keys and Host entries.
+    Writing to it unconditionally crashed startup on a read-only mount and
+    destroyed the operator's config on a read-write one (issue #22)."""
+
+    def _run(self, home, data_dir):
+        mod = self.mod
+        with mock.patch.object(mod, "DATA_DIR", data_dir), \
+             mock.patch.dict(mod.os.environ, {"HOME": home}):
+            mod._setup_ssh_config()
+
+    def test_read_only_ssh_dir_does_not_raise(self):
+        """This crashed the container before it served anything."""
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as tmp:
+            home, data = _os.path.join(tmp, "home"), _os.path.join(tmp, "data")
+            _os.makedirs(_os.path.join(home, ".ssh"))
+            _os.makedirs(data)
+            _os.chmod(_os.path.join(home, ".ssh"), 0o500)  # read+execute only
+            try:
+                self._run(home, data)  # must not raise
+            finally:
+                _os.chmod(_os.path.join(home, ".ssh"), 0o700)
+
+    def test_existing_config_is_never_overwritten(self):
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as tmp:
+            home, data = _os.path.join(tmp, "home"), _os.path.join(tmp, "data")
+            ssh = _os.path.join(home, ".ssh")
+            _os.makedirs(ssh); _os.makedirs(data)
+            original = "Host myserver\n    HostName 10.0.0.5\n    User admin\n"
+            cfg = _os.path.join(ssh, "config")
+            with open(cfg, "w") as f:
+                f.write(original)
+            self._run(home, data)
+            with open(cfg) as f:
+                self.assertEqual(f.read(), original,
+                                 "the operator's SSH config was modified")
+
+    def test_config_is_written_when_absent(self):
+        """The default case — no mount — must still get persistent known_hosts."""
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as tmp:
+            home, data = _os.path.join(tmp, "home"), _os.path.join(tmp, "data")
+            _os.makedirs(data)
+            self._run(home, data)
+            with open(_os.path.join(home, ".ssh", "config")) as f:
+                written = f.read()
+            self.assertIn("UserKnownHostsFile", written)
+            self.assertIn(data, written)
+
+    def test_known_hosts_is_created_on_the_data_volume(self):
+        import tempfile, os as _os
+        with tempfile.TemporaryDirectory() as tmp:
+            home, data = _os.path.join(tmp, "home"), _os.path.join(tmp, "data")
+            _os.makedirs(data)
+            self._run(home, data)
+            self.assertTrue(_os.path.exists(_os.path.join(data, "known_hosts")))
+
+
 class DeferredNotificationTests(SafetyTestBase):
     """Deferring a container must stop it being notified about, not just move
     it to another tab (issue #20)."""

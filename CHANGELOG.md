@@ -2,6 +2,12 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.3] — 2026-08-28
+
+### Fixed
+- **Mounting `~/.ssh` broke the container, both ways** — for multi-host SSH, the README suggests bind-mounting your `~/.ssh` so docker-updater can use your existing keys and `Host` entries. Startup then wrote `~/.ssh/config` unconditionally, which meant: mounted **read-only** (as documented), the write raised `OSError: Read-only file system` and the container died before serving anything; mounted **read-write**, it silently overwrote the config and destroyed the operator's host mappings. It now never writes over an existing config — a mounted one is used exactly as supplied — and a failed write is logged rather than fatal. The default case (nothing mounted) is unchanged: a config is still written so accepted host keys persist in `data/known_hosts` (closes #22)
+- Startup now states which is in effect (`Persistent known_hosts: …` vs `Using the mounted /root/.ssh/config as-is`), and warns if a mounted config doesn't set `UserKnownHostsFile` — in that case SSH uses `~/.ssh/known_hosts`, so keys accepted via **Test Connection** won't persist if that path is read-only
+
 ## [1.15.2] — 2026-08-03
 
 ### Fixed
