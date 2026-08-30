@@ -31,3 +31,5 @@ services:
       # update checks. Use a personal access token, not your password.
       - DOCKERHUB_USERNAME=${DOCKERHUB_USERNAME:-}
       - DOCKERHUB_TOKEN=${DOCKERHUB_TOKEN:-}
+      # Required for /webhook/github to verify signatures. Blank = no verification.
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
