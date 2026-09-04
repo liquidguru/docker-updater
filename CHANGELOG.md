@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.4] — 2026-09-04
+
+### Fixed
+- **Reclaim progress looked stuck at `0`** — while deleting dangling images, the status line under the button counted up correctly but the button's own label stayed frozen at `Working — 0/N…` for the whole batch. `pollPruneJob()` was only ever handed the status element; the button was never passed in, so nothing updated it until the run finished. Both now advance together. Purely cosmetic, but on a large "select all" batch it made a working operation look hung — which is exactly when you're most likely to cancel it.
+
+### Changed
+- **`GITHUB_WEBHOOK_SECRET` is now passed through `docker-compose.yml`** — `/webhook/github` reads it to verify signatures, but the sample compose file never forwarded it, so anyone deploying from it had no way to enable verification without editing the file by hand. Set it in `.env` (already gitignored); blank keeps the previous no-verification behaviour.
+
 ## [1.15.3] — 2026-08-28
 
 ### Fixed

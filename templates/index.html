@@ -730,7 +730,7 @@
         out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + (d.error || t('prune.start_err'));
         return;
       }
-      await pollPruneJob(d.job_id, out);
+      await pollPruneJob(d.job_id, out, btn);
     } catch (e) {
       out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + t('prune.load_err');
     } finally {
@@ -740,7 +740,7 @@
     }
   }
 
-  async function pollPruneJob(jobId, out) {
+  async function pollPruneJob(jobId, out, btn) {
     // Runs server-side in a background thread ? polled rather than awaited in
     // one request, since a large "select all" batch of multi-GB images can
     // easily outlast a reverse proxy's read timeout.
@@ -766,6 +766,7 @@
       if (d.status === 'running') {
         out.style.color = 'var(--muted)';
         out.textContent = t('prune.working', {done: d.done, total: d.total});
+        if (btn) btn.textContent = t('prune.working', {done: d.done, total: d.total});
         continue;
       }
       out.style.color = 'var(--green)';
