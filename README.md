@@ -71,7 +71,7 @@ The WebUI supports **English** and **简体中文**:
 
 ## Features
 
-- **Registry polling** — compares local image digests against the registry without pulling, using the Docker Registry v2 manifest API (`HEAD` + `Docker-Content-Digest`)
+- **Registry polling** — compares local image digests against the registry without pulling, using the Docker Registry v2 manifest API (`HEAD` + `Docker-Content-Digest`); the digest compared is the one the container is *actually running*, so a container left behind by an out-of-band `docker pull` is still flagged
 - **Multi-registry support** — Docker Hub, GHCR (`ghcr.io`), LinuxServer (`lscr.io`), and any registry that implements the Bearer token challenge
 - **Multi-host support** — manage containers across multiple Docker hosts (SSH or TCP) from a single dashboard; SSH host keys are auto-accepted on first Test Connection (TOFU) and persisted across restarts; each host has a connection health indicator and containers are shown together with a host chip
 - **Per-container control** — update individually, defer for 7/14/30/90 days or indefinitely, or un-defer at any time. A deferred container stops appearing in update notifications until the deferral expires (the notification says how many are being held back, so nothing goes quietly missing)
@@ -95,7 +95,7 @@ The WebUI supports **English** and **简体中文**:
 - **Crash-safe** — if docker-updater is restarted mid-update/rollback, it reconciles leftovers on startup and restores any service left down
 - **Helper containers hidden** — the containers docker-updater creates during an operation (`{name}_old` backups and `{name}_rollingback`) are excluded from the update list, registry checks and the dashboard
 - **Multi-arch image** — published for `linux/amd64` and `linux/arm64`, so it runs on x86 servers and ARM boards (Raspberry Pi, etc.)
-- **Locally-built images skipped** — containers with no `RepoDigests` (built from local Dockerfiles) are automatically ignored
+- **Locally-built images skipped** — images built from a local Dockerfile have nothing to compare against a registry, so they're ignored. Identified by having no `RepoDigests` but still carrying the tag they were built as, so a *pulled* image that lost its digest isn't mistaken for one
 - **Persistent state** — update history, deferred decisions, and last-check timestamps survive container restarts
 - **Themeable UI** — tabbed dashboard (Updates / Deferred / Backups / Up to Date / Unchecked / All / Hosts / Settings) with six themes to pick from in Settings: GitHub Dark, Midnight, Nord, Dracula, Carbon, and Light. Applies instantly and persists across restarts and updates
 
@@ -372,11 +372,12 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
 ## How it works
 
 1. On startup (silently) and on the configured [check schedule](#check-schedule), docker-updater iterates all running containers (except its own `_old` / `_rollingback` helpers)
-2. For each container it extracts the matching local image digest from `RepoDigests`
+2. For each container it extracts the matching local image digest from `RepoDigests` — read from the image the container is **actually running**, not from whatever the tag currently points at, so a container that was never recreated after an out-of-band pull is still compared correctly
 3. It sends a `HEAD` request to the registry for the image's manifest, reading the `Docker-Content-Digest` response header — no image data is transferred
 4. If the digests differ on a multi-arch image, it checks the platform manifest/config digest so index-only changes don't create false update alerts
-5. If the local platform image really differs from the current registry image, the container is flagged as having an update available
-6. When you click **Update**, the app:
+5. If the running image has no `RepoDigests` at all — an orphaned pull, where the tag moved on and left the old image with neither tag nor digest — it compares **image IDs** instead, resolving the registry manifest's config digest for the running platform
+6. If the local platform image really differs from the current registry image, the container is flagged as having an update available
+7. When you click **Update**, the app:
    - Pulls the new image (streaming progress to the log modal)
    - Stops the old container and renames it to `{name}_old` (kept as a rollback target)
    - Creates and starts the new container using the Docker SDK low-level API (Watchtower pattern), carrying over its configuration (with the exceptions listed under [Caveats](#caveats))
@@ -470,7 +471,8 @@ docker rm watchtower
 - **docker compose stacks**: Updates recreate individual containers using the Docker SDK. The container's `docker-compose.yml` is not modified — if you later run `docker compose up` it will see the new image and behave correctly, but the compose file's image tag won't be changed. Optionally, the other members of the stack can be **restarted** after an update so they pick up the new container's IP (Settings → *Restart the rest of the Compose stack after an update*).
 - **Named volumes**: Preserved automatically — both bind mounts (`HostConfig.Binds`) and named/`--mount` volumes (`HostConfig.Mounts`, where Compose stores them) are reattached on recreation.
 - **Settings not carried over on recreation**: recreation copies an explicit list of settings, so anything outside that list falls back to the Docker daemon's default. Most notably **resource limits** (memory, CPU, PIDs), **GPU/device requests**, **an explicitly-set logging driver**, **ulimits**, **sysctls**, `read-only` root, `--init`, custom `shm-size`, added groups, and a non-default runtime. If a container relies on any of these, prefer recreating it through Compose after the update, or check it afterwards. (A setting that merely matches the daemon default is unaffected — e.g. on Synology, containers using the default `db` log driver keep it.)
-- **Locally-built images**: Any container whose image has no `RepoDigests` is skipped (these can't be compared against a registry).
+- **Locally-built images**: Images built from a local Dockerfile can't be compared against a registry, so they're skipped. They're recognised by having no `RepoDigests` while still carrying the tag they were built as — an image that was *pulled* and later lost its digest (see below) is not skipped.
+- **Images orphaned by an out-of-band pull**: If something else pulls a tag your container already uses — another tool, or a manual `docker pull` — the tag moves on and the container keeps running the old image. Depending on your image store, that leftover image can end up with no tag and no digest. docker-updater falls back to comparing image IDs in that case, so the container is still flagged rather than silently ignored.
 - **Private registries**: Supports anonymous and Bearer-token registries, plus authenticated Docker Hub (see [Docker Hub rate limits](#docker-hub-rate-limits)). Credentials for other registries are not yet supported — if you need them, open an issue saying which registry.
 - **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required ones. If the container *crashes* as a result it will be caught and rolled back automatically — but an image that starts cleanly and is only broken at the application level will pass the health check, so still check release notes for new required env vars.
 - **Health verification is shallow**: a replacement is confirmed by watching its Docker state (and its HEALTHCHECK, if the image defines one) — not by testing whether your service actually works. A container that runs happily while serving errors is indistinguishable from a good one. If an image's healthcheck is slow to pass, the update stands but the previous container is kept as a backup rather than removed.
