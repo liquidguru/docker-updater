@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.4"
+APP_VERSION          = "1.15.5"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1198,10 +1198,17 @@ def _has_changelog(container) -> bool:
 
 
 def is_locally_built(container) -> bool:
+    """True only when we positively know the image has no registry digest.
+
+    If the image can't be inspected at all — most often because it was pruned
+    out from under a still-running container after an out-of-band pull — that
+    is *unknown*, not "locally built". Returning True there silently dropped
+    the container from every future scan with no log line (issue #23).
+    """
     try:
         return not container.image.attrs.get("RepoDigests")
     except Exception:
-        return True
+        return False
 
 
 # ── Update checking ───────────────────────────────────────────────────────────
@@ -1217,10 +1224,18 @@ def _scan_host(client, host_id: str) -> dict:
         if is_locally_built(container):
             continue
         local_digest = get_local_digest(container, image_name)
+        if not local_digest:
+            # We could not read the running image's digest, so we cannot say
+            # anything about it. Reporting "ok" here claimed it was up to date
+            # on no evidence (issue #23); leaving it out of `available` puts it
+            # in the Not checked tab, which is the honest answer.
+            print(f"[checker:{host_id}] {name}: [unknown] could not read the "
+                  f"local image digest for {image_name} — is the image still present?")
+            continue
         remote_digest = get_remote_digest(
             image_name, local_digest, get_local_image_id(container), get_local_platform(container),
         )
-        has_update = bool(local_digest and remote_digest and local_digest != remote_digest)
+        has_update = bool(remote_digest and local_digest != remote_digest)
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
         if remote_digest:

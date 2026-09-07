@@ -648,6 +648,51 @@ class DeferredNotificationTests(SafetyTestBase):
         self.assertNotIn("web", sent.get("body", ""))
 
 
+class StaleContainerDetectionTests(SafetyTestBase):
+    """A container keeps running its original image after the tag moves on.
+    The digest we compare must come from that image, not from the tag (#23)."""
+
+    def _container(self, repo_digests, image_name="amir20/dozzle:latest"):
+        mod = self.mod
+
+        class Img:
+            attrs = {"RepoDigests": list(repo_digests), "Id": "sha256:" + "f" * 64,
+                     "Os": "linux", "architecture": "amd64"}
+
+        class C:
+            name = "dozzle"
+            labels = {}
+            attrs = {"Config": {"Image": image_name}}
+            image = Img()
+
+        return mod, C()
+
+    def test_digest_comes_from_the_running_image_not_the_tag(self):
+        """The reporter's exact case: tag refreshed out-of-band, container stale."""
+        old = "sha256:1124fe771e2d31e18db8064e93e7eb24d436f92634abdedeca47cb4eb2c9b991"
+        mod, c = self._container([f"amir20/dozzle@{old}"])
+        self.assertEqual(mod.get_local_digest(c, "amir20/dozzle:latest"), old)
+
+    def test_uninspectable_image_is_not_treated_as_locally_built(self):
+        """Returning True here silently dropped the container from every scan."""
+        mod = self.mod
+
+        class C:
+            name = "gone"
+            labels = {}
+            attrs = {"Config": {"Image": "amir20/dozzle:latest"}}
+
+            @property
+            def image(self):
+                raise RuntimeError("no such image")
+
+        self.assertFalse(mod.is_locally_built(C()))
+
+    def test_missing_repo_digests_still_counts_as_locally_built(self):
+        mod, c = self._container([])
+        self.assertTrue(mod.is_locally_built(c))
+
+
 class ImageReferenceParsingTests(SafetyTestBase):
     """Docker Hub can be spelled several ways, but only registry-1.docker.io
     serves the v2 API. Getting this wrong made the digest check fail, and the

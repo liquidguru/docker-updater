@@ -2,6 +2,15 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.5] — 2026-09-07
+
+### Fixed
+- **Containers could be silently dropped from update checks** — if a container's image could not be inspected (most often because it was pruned out from under a still-running container after an out-of-band pull), it was treated as a locally-built image and skipped from every scan from then on, with no log line and no dashboard entry. Such a container is now checked normally (#23)
+- **"Up to date" is no longer claimed on missing evidence** — when the running image's digest can't be read, the checker logged `[ok]`, which is indistinguishable from a real up-to-date result. It now logs `[unknown]` with the reason and leaves the container in the **Not checked** tab instead of asserting it's current (#23)
+
+### Notes
+- The update check already compares the digest of the image the container is *actually running*, not the current digest of the local tag — verified against a container left behind by an out-of-band `docker pull` that moved `:latest` forward
+
 ## [1.15.4] — 2026-09-04
 
 ### Fixed
