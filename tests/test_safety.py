@@ -688,9 +688,31 @@ class StaleContainerDetectionTests(SafetyTestBase):
 
         self.assertFalse(mod.is_locally_built(C()))
 
-    def test_missing_repo_digests_still_counts_as_locally_built(self):
-        mod, c = self._container([])
-        self.assertTrue(mod.is_locally_built(c))
+    def test_locally_built_image_is_still_skipped(self):
+        """No digest but a real tag = built here. Nothing to compare it to."""
+        mod = self.mod
+
+        class Img:
+            attrs = {"RepoDigests": [], "RepoTags": ["myapp:latest"]}
+
+        class C:
+            image = Img()
+
+        self.assertTrue(mod.is_locally_built(C()))
+
+    def test_orphaned_pull_is_not_mistaken_for_a_local_build(self):
+        """No tag and no digest: the tag moved on after an out-of-band pull and
+        left this image behind, still in use. Skipping it hid a stale container
+        from every scan with no log line (#23)."""
+        mod = self.mod
+
+        class Img:
+            attrs = {"RepoDigests": [], "RepoTags": []}
+
+        class C:
+            image = Img()
+
+        self.assertFalse(mod.is_locally_built(C()))
 
 
 class ImageReferenceParsingTests(SafetyTestBase):

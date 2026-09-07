@@ -2,6 +2,12 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.6] — 2026-09-07
+
+### Fixed
+- **A container whose image lost its tag and digest was silently skipped forever** — when an out-of-band `docker pull` moves a tag forward, the image the old container is still running is left behind. On the containerd image store that orphaned image keeps *neither* a tag nor a `RepoDigest`, which is indistinguishable from a locally-built image under the old test — so the container was dropped from every scan, with no log line, no dashboard entry, and no way to tell it apart from "up to date". Reported by a user whose containers sat a full minor version behind across five hosts while the dashboard stayed silent (#23)
+- **Update checks now fall back to comparing image IDs** when the local image has no `RepoDigests`. A manifest's config digest is exactly the value Docker reports as an image's `Id`, so a stale container is still detected without a digest to compare. Genuinely locally-built images — no digest but still carrying the tag they were built as — are skipped exactly as before
+
 ## [1.15.5] — 2026-09-07
 
 ### Fixed

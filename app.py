@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.5"
+APP_VERSION          = "1.15.6"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1149,6 +1149,48 @@ def get_remote_digest(
     return None
 
 
+def get_remote_image_id(image_name: str, local_platform: dict | None = None) -> str | None:
+    """Return the registry's image *ID* — the manifest's config digest — for the
+    platform we're running on.
+
+    Needed when the local image carries no RepoDigests to compare against. A
+    config digest is exactly the value Docker reports as an image's Id, so a
+    stale container is still detectable without one (issue #23).
+    """
+    try:
+        registry, repo, tag = parse_image(image_name)
+        headers = {"Accept": MANIFEST_ACCEPT}
+        url = f"https://{registry}/v2/{repo}/manifests/{tag}"
+        r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        if r.status_code == 401:
+            token = _token_from_challenge(r.headers.get("WWW-Authenticate", ""), registry)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+                r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        _note_rate_limit(registry, r)
+        if r.status_code != 200:
+            return None
+        body = r.json()
+        if body.get("manifests"):  # manifest list — descend to our platform
+            match = next(
+                (m for m in body["manifests"]
+                 if _manifest_matches_platform(m, local_platform)),
+                None,
+            )
+            digest = (match or {}).get("digest")
+            if not digest:
+                return None
+            r = requests.get(f"https://{registry}/v2/{repo}/manifests/{digest}",
+                             headers=headers, timeout=10, allow_redirects=True)
+            if r.status_code != 200:
+                return None
+            body = r.json()
+        return (body.get("config") or {}).get("digest")
+    except Exception as e:
+        print(f"[checker] registry error resolving image id for {image_name}: {e}")
+    return None
+
+
 def get_local_digest(container, image_name: str | None = None) -> str | None:
     try:
         digests = container.image.attrs.get("RepoDigests", [])
@@ -1198,15 +1240,23 @@ def _has_changelog(container) -> bool:
 
 
 def is_locally_built(container) -> bool:
-    """True only when we positively know the image has no registry digest.
+    """True only when the image really is a local build we can't compare.
 
-    If the image can't be inspected at all — most often because it was pruned
-    out from under a still-running container after an out-of-band pull — that
-    is *unknown*, not "locally built". Returning True there silently dropped
-    the container from every future scan with no log line (issue #23).
+    "No RepoDigests" alone is not enough. A locally-built image has no digest
+    but *does* keep the tag it was built as. An image that was pulled and later
+    orphaned has neither — the tag moved on after an out-of-band pull, and on
+    the containerd image store the old image is left with no tag and no digest
+    even though a container is still running it. Treating that as a local build
+    dropped it from every scan with no log line, so a stale container could be
+    missed indefinitely (issue #23).
+
+    An image that can't be inspected at all is likewise unknown, not local.
     """
     try:
-        return not container.image.attrs.get("RepoDigests")
+        attrs = container.image.attrs
+        if attrs.get("RepoDigests"):
+            return False
+        return bool(attrs.get("RepoTags"))
     except Exception:
         return False
 
@@ -1223,18 +1273,29 @@ def _scan_host(client, host_id: str) -> dict:
         image_name = container.attrs["Config"]["Image"]
         if is_locally_built(container):
             continue
+        local_platform = get_local_platform(container)
+        local_image_id = get_local_image_id(container)
         local_digest = get_local_digest(container, image_name)
+
+        if local_digest:
+            remote_digest = get_remote_digest(
+                image_name, local_digest, local_image_id, local_platform,
+            )
+        else:
+            # The image has no RepoDigests — typically a pull that was orphaned
+            # when the tag moved on. Image IDs are still directly comparable, so
+            # fall back to those rather than giving up on the container (#23).
+            local_digest = local_image_id
+            remote_digest = get_remote_image_id(image_name, local_platform)
+
         if not local_digest:
-            # We could not read the running image's digest, so we cannot say
-            # anything about it. Reporting "ok" here claimed it was up to date
-            # on no evidence (issue #23); leaving it out of `available` puts it
-            # in the Not checked tab, which is the honest answer.
-            print(f"[checker:{host_id}] {name}: [unknown] could not read the "
-                  f"local image digest for {image_name} — is the image still present?")
+            # Nothing to compare against. Saying "ok" here claimed the container
+            # was up to date on no evidence; leaving it out of `available` puts
+            # it in the Not checked tab, which is the honest answer.
+            print(f"[checker:{host_id}] {name}: [unknown] could not read the local "
+                  f"image for {image_name} — is it still present on this host?")
             continue
-        remote_digest = get_remote_digest(
-            image_name, local_digest, get_local_image_id(container), get_local_platform(container),
-        )
+
         has_update = bool(remote_digest and local_digest != remote_digest)
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
