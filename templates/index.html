@@ -628,6 +628,12 @@
         <div class="backup-options" style="flex-direction:column;align-items:stretch">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <button class="btn-secondary btn-sm" id="prune-btn" onclick="loadDanglingImages()">${t('btn.show_reclaimable')}</button>
+            ${multiHost ? `<label style="display:flex;align-items:center;gap:6px;font-size:13px">
+              <span class="setting-note">${t('prune.on_host')}</span>
+              <select id="prune-host" onchange="onPruneHostChange(this.value)">
+                ${allHosts.map(h => `<option value="${esc(h.id)}"${h.id === _pruneHost ? ' selected' : ''}>${esc(h.id === 'local' ? t('hosts.local') : h.name)}${h.status === 'offline' ? ` — ${t('hosts.unreachable')}` : ''}</option>`).join('')}
+              </select>
+            </label>` : ''}
             <span class="setting-note">${t('settings.prune_hint')}</span>
           </div>
           <div id="prune-list" style="width:100%"></div>
@@ -639,6 +645,17 @@
   }
 
   let _danglingImages = [];
+  // Which host the reclaimable list is showing. Images are per-daemon, so this
+  // has to be explicit — deleting from the wrong host would be silent and wrong.
+  let _pruneHost = 'local';
+
+  function onPruneHostChange(hostId) {
+    _pruneHost = hostId;
+    _danglingImages = [];
+    document.getElementById('prune-list').innerHTML = '';
+    document.getElementById('prune-result').textContent = '';
+    loadDanglingImages();
+  }
 
   async function loadDanglingImages() {
     const btn  = document.getElementById('prune-btn');
@@ -648,7 +665,7 @@
     btn.disabled = true;
     btn.textContent = t('prune.loading');
     try {
-      const r = await fetch('/api/dangling-images');
+      const r = await fetch(`/api/dangling-images?host=${encodeURIComponent(_pruneHost)}`);
       const d = await r.json();
       if (!r.ok) { out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error}`; return; }
       _danglingImages = d.images || [];
@@ -715,7 +732,15 @@
   async function deleteSelectedImages() {
     const ids = [...document.querySelectorAll('.prune-check:checked')].map(cb => cb.value);
     if (!ids.length) return;
-    if (!(await showConfirm(t('prune.confirm', {n: ids.length})))) return;
+    // Name the host in the prompt when there's more than one — deleting images
+    // on the wrong daemon is irreversible and would otherwise be invisible.
+    const hostName = _pruneHost === 'local'
+      ? t('hosts.local')
+      : (allHosts.find(h => h.id === _pruneHost)?.name || _pruneHost);
+    const msg = multiHost
+      ? t('prune.confirm_host', {n: ids.length, host: hostName})
+      : t('prune.confirm', {n: ids.length});
+    if (!(await showConfirm(msg))) return;
     const btn = document.getElementById('prune-delete-btn');
     const out = document.getElementById('prune-result');
     btn.disabled = true;
@@ -724,7 +749,7 @@
     out.textContent = t('prune.working', {done: 0, total: ids.length});
     try {
       const r = await fetch('/api/prune-images', { method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ ids }) });
+        body: JSON.stringify({ ids, host_id: _pruneHost }) });
       const d = await r.json();
       if (!r.ok || !d.job_id) {
         out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + (d.error || t('prune.start_err'));

@@ -2,6 +2,15 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.7] — 2026-09-07
+
+### Added
+- **The reclaimable-images list is now per-host** — with more than one Docker host configured, a host picker sits beside **Show reclaimable images** and chooses which daemon you're inspecting. Images are stored per-host, so the list previously only ever showed the machine docker-updater itself runs on, with no indication that the others weren't covered. The delete confirmation names the host too, since removing images on the wrong daemon is irreversible and would otherwise be invisible. Single-host setups are unchanged — no picker appears
+- Raised by a user running six hosts, where images orphaned by another tool's pulls had been accumulating on all of them (#23)
+
+### Fixed
+- `GET /api/dangling-images` returned **500** for an unknown host instead of 404, unlike `POST /api/prune-images`. Reachable now that a host can be removed while a stale page still has it selected
+
 ## [1.15.6] — 2026-09-07
 
 ### Fixed

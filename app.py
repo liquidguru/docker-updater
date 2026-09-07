@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.6"
+APP_VERSION          = "1.15.7"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -2692,8 +2692,13 @@ def api_dangling_images():
         } for img in images]
         out.sort(key=lambda x: x["size"], reverse=True)
         return jsonify({"ok": True, "images": out})
+    except ValueError as e:
+        # Unknown host — a 404, matching /api/prune-images. Reachable now that
+        # the reclaim list has a host selector and a host can be removed while
+        # a stale page still has it selected.
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Docker unavailable: {e}"}), 500
 
 
 def _friendly_skip_reason(client, exc) -> str:
