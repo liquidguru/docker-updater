@@ -119,6 +119,8 @@
   .host-chip.online  { border-color:color-mix(in srgb, var(--green) 30%, transparent); color:var(--green); }
   .host-chip.offline { border-color:color-mix(in srgb, var(--red) 30%, transparent); color:var(--red); }
   .compose-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--purple); white-space:nowrap; }
+  .size-chip { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .size-chip-dl { color:var(--blue); margin-left:-2px; }
 
   .badge-status { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.4px; }
   .badge-update   { background:color-mix(in srgb, var(--orange) 15%, transparent); color:var(--orange); border:1px solid color-mix(in srgb, var(--orange) 30%, transparent); }
@@ -957,6 +959,16 @@
       ? `<span class="badge-status badge-updating"><span class="spinner"></span> ${t('badge.updating')}</span>`
       : (statusMap[c.status] || '');
     const checkedAt = c.checked_at ? t('card.checked', {when: timeAgo(c.checked_at)}) : t('card.not_checked');
+    // Image size (#24): on-disk size of the running image, plus the compressed
+    // download size of the pending update when one is known. Different units,
+    // so they are labelled rather than shown as "A → B".
+    let sizeChip = '';
+    if (c.image_size) {
+      sizeChip = `<span class="size-chip" title="${t('card.size_title')}">${fmtBytes(c.image_size)}</span>`;
+      if (c.remote_size) {
+        sizeChip += `<span class="size-chip size-chip-dl" title="${t('card.download_title')}">↓ ${fmtBytes(c.remote_size)}</span>`;
+      }
+    }
 
     // Host chip — only show when multi-host
     const hostChip = multiHost
@@ -1008,7 +1020,7 @@
       <div class="card-info">
         <div class="card-name">${esc(c.name)}</div>
         <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
-        <div class="card-meta">${checkedAt}${hostChip ? `<span>·</span>${hostChip}` : ''}${composeChip ? `<span>·</span>${composeChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
+        <div class="card-meta">${checkedAt}${sizeChip ? `<span>·</span>${sizeChip}` : ''}${hostChip ? `<span>·</span>${hostChip}` : ''}${composeChip ? `<span>·</span>${composeChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
       </div>
       <div class="card-actions">${badge}${actions}${logsBtn}</div>
     </div>`;
@@ -1587,6 +1599,14 @@
 
   function uiLocale() {
     return I18N.currentLang === 'zh-CN' ? 'zh-CN' : 'en-AU';
+  }
+
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let u = 0;
+    while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+    return (u === 0 ? n.toFixed(0) : n < 10 ? n.toFixed(2) : n.toFixed(1)) + ' ' + units[u];
   }
 
   function timeAgo(iso) {

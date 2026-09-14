@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.8] — 2026-09-15
+
+### Added
+- **Image size on every container card** — the running image's on-disk size sits beside the "Checked … ago" line, and a card with a pending update also shows a blue **↓** chip with the compressed download size of the new image, read from the registry manifest. The two are different units (uncompressed on disk vs compressed transfer), so they're labelled by tooltip rather than shown as a before/after pair. The download size is only looked up for containers that actually have an update, so up-to-date containers add no registry requests and no Docker Hub rate-limit cost. Requested in #24
+
 ## [1.15.7] — 2026-09-07
 
 ### Added

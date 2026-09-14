@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.7"
+APP_VERSION          = "1.15.8"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1149,14 +1149,9 @@ def get_remote_digest(
     return None
 
 
-def get_remote_image_id(image_name: str, local_platform: dict | None = None) -> str | None:
-    """Return the registry's image *ID* — the manifest's config digest — for the
-    platform we're running on.
-
-    Needed when the local image carries no RepoDigests to compare against. A
-    config digest is exactly the value Docker reports as an image's Id, so a
-    stale container is still detectable without one (issue #23).
-    """
+def _fetch_platform_manifest(image_name: str, local_platform: dict | None = None) -> dict | None:
+    """Return the single-platform image manifest for `image_name` — descending
+    through a manifest list / OCI index to the platform we're running on."""
     try:
         registry, repo, tag = parse_image(image_name)
         headers = {"Accept": MANIFEST_ACCEPT}
@@ -1185,10 +1180,50 @@ def get_remote_image_id(image_name: str, local_platform: dict | None = None) -> 
             if r.status_code != 200:
                 return None
             body = r.json()
-        return (body.get("config") or {}).get("digest")
+        return body
     except Exception as e:
-        print(f"[checker] registry error resolving image id for {image_name}: {e}")
+        print(f"[checker] registry error fetching manifest for {image_name}: {e}")
     return None
+
+
+def _manifest_download_size(manifest: dict | None) -> int | None:
+    """Compressed bytes a pull of this manifest transfers: config + every layer.
+    Not comparable with the on-disk `Size` of a local image, which is
+    uncompressed — the two are shown side by side but labelled differently."""
+    if not manifest:
+        return None
+    try:
+        total = int((manifest.get("config") or {}).get("size") or 0)
+        for layer in manifest.get("layers") or []:
+            total += int(layer.get("size") or 0)
+        return total or None
+    except Exception:
+        return None
+
+
+def get_remote_image_id(image_name: str, local_platform: dict | None = None) -> str | None:
+    """Return the registry's image *ID* — the manifest's config digest — for the
+    platform we're running on.
+
+    Needed when the local image carries no RepoDigests to compare against. A
+    config digest is exactly the value Docker reports as an image's Id, so a
+    stale container is still detectable without one (issue #23).
+    """
+    manifest = _fetch_platform_manifest(image_name, local_platform)
+    return ((manifest or {}).get("config") or {}).get("digest")
+
+
+def get_remote_image_size(image_name: str, local_platform: dict | None = None) -> int | None:
+    """Download size of the registry's current image for our platform (#24)."""
+    return _manifest_download_size(_fetch_platform_manifest(image_name, local_platform))
+
+
+def get_local_image_size(container) -> int | None:
+    try:
+        size = container.image.attrs.get("Size")
+        return int(size) if size else None
+    except Exception:
+        return None
 
 
 def get_local_digest(container, image_name: str | None = None) -> str | None:
@@ -1300,6 +1335,10 @@ def _scan_host(client, host_id: str) -> dict:
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
         if remote_digest:
+            # The download size costs a manifest GET (which Docker Hub counts
+            # against the pull rate limit), so only look it up when there is
+            # actually something to download (#24).
+            remote_size = get_remote_image_size(image_name, local_platform) if has_update else None
             labels = container.labels or {}
             available[name] = {
                 "image": image_name,
@@ -1308,6 +1347,8 @@ def _scan_host(client, host_id: str) -> dict:
                 "has_update": has_update,
                 "checked_at": datetime.datetime.utcnow().isoformat() + "Z",
                 "compose_project": labels.get("com.docker.compose.project"),
+                "image_size": get_local_image_size(container),
+                "remote_size": remote_size,
             }
     return available
 
@@ -2389,6 +2430,8 @@ def api_status():
                 "has_rollback": has_rollback,
                 "rollback_expires": rb.get("expires_at") if has_rollback else None,
                 "compose_project": _compose,
+                "image_size": get_local_image_size(container),
+                "remote_size": info.get("remote_size") if status in ("update", "deferred") else None,
                 "host_id": "local", "host_name": "Local",
             })
     except Exception as e:
@@ -2446,6 +2489,8 @@ def api_status():
                 "has_changelog": bool(_h_cl_override),
                 "changelog_url": _h_cl_override,
                 "compose_project": cinfo.get("compose_project"),
+                "image_size": cinfo.get("image_size"),
+                "remote_size": cinfo.get("remote_size") if cstatus in ("update", "deferred") else None,
                 "host_id": host_id, "host_name": host_name,
             })
 
