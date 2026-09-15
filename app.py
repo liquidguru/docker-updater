@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.8"
+APP_VERSION          = "1.15.9"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1266,7 +1266,7 @@ def get_remote_download_analysis(
     layers_present — or None if the manifest can't be read. download_size /
     layers_present are None when the breakdown can't be computed."""
     manifest, registry, repo, token = _fetch_platform_manifest_ctx(image_name, local_platform)
-    if not manifest:
+    if not manifest or not registry or not repo:
         return None
     layers = manifest.get("layers") or []
     result = {

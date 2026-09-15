@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.9] — 2026-09-15
+
+### Changed
+- **The update download size now counts only the layers your host doesn't have** — a pull skips any layer already present ("Already exists"), so the old whole-image number overstated the transfer. The checker now reads the new image's config blob for its layer `diff_ids` and compares them against every local image's `RootFS.Layers`, exactly as Docker does; the **↓** chip shows the bytes that will really move, and a new **▤ new/total** layer chip sits beside it, with the full breakdown in the tooltip. Costs one config-blob `GET` per updated container (blob fetches don't count against Docker Hub's pull rate limit) and one inspect per local image, collected once per scan and only when something has an update. Falls back to the whole-image size when the breakdown can't be computed. Contributed by @mayberryjp (#25, #26)
+
 ## [1.15.8] — 2026-09-15
 
 ### Added
