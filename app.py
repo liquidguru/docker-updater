@@ -1149,13 +1149,17 @@ def get_remote_digest(
     return None
 
 
-def _fetch_platform_manifest(image_name: str, local_platform: dict | None = None) -> dict | None:
-    """Return the single-platform image manifest for `image_name` — descending
-    through a manifest list / OCI index to the platform we're running on."""
+def _fetch_platform_manifest_ctx(
+    image_name: str, local_platform: dict | None = None
+) -> tuple[dict | None, str | None, str | None, str | None]:
+    """Like `_fetch_platform_manifest`, but also return the (registry, repo,
+    token) used to fetch it, so callers can pull sibling blobs (e.g. the image
+    config) on the same authorization. Returns (manifest, registry, repo, token)."""
     try:
         registry, repo, tag = parse_image(image_name)
         headers = {"Accept": MANIFEST_ACCEPT}
         url = f"https://{registry}/v2/{repo}/manifests/{tag}"
+        token = None
         r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
         if r.status_code == 401:
             token = _token_from_challenge(r.headers.get("WWW-Authenticate", ""), registry)
@@ -1164,7 +1168,7 @@ def _fetch_platform_manifest(image_name: str, local_platform: dict | None = None
                 r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
         _note_rate_limit(registry, r)
         if r.status_code != 200:
-            return None
+            return None, registry, repo, token
         body = r.json()
         if body.get("manifests"):  # manifest list — descend to our platform
             match = next(
@@ -1174,16 +1178,44 @@ def _fetch_platform_manifest(image_name: str, local_platform: dict | None = None
             )
             digest = (match or {}).get("digest")
             if not digest:
-                return None
+                return None, registry, repo, token
             r = requests.get(f"https://{registry}/v2/{repo}/manifests/{digest}",
                              headers=headers, timeout=10, allow_redirects=True)
             if r.status_code != 200:
-                return None
+                return None, registry, repo, token
             body = r.json()
-        return body
+        return body, registry, repo, token
     except Exception as e:
         print(f"[checker] registry error fetching manifest for {image_name}: {e}")
-    return None
+    return None, None, None, None
+
+
+def _fetch_platform_manifest(image_name: str, local_platform: dict | None = None) -> dict | None:
+    """Return the single-platform image manifest for `image_name` — descending
+    through a manifest list / OCI index to the platform we're running on."""
+    return _fetch_platform_manifest_ctx(image_name, local_platform)[0]
+
+
+def _fetch_config_diff_ids(
+    registry: str, repo: str, manifest: dict, token: str | None = None
+) -> list[str] | None:
+    """Fetch the image config blob and return its rootfs.diff_ids — the
+    uncompressed layer digests, in the same order as the manifest's `layers`.
+    These are the values Docker stores as a local image's RootFS.Layers, so
+    they can be compared directly to decide which layers are already present."""
+    cfg_digest = (manifest.get("config") or {}).get("digest")
+    if not cfg_digest:
+        return None
+    try:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        r = requests.get(f"https://{registry}/v2/{repo}/blobs/{cfg_digest}",
+                         headers=headers, timeout=10, allow_redirects=True)
+        if r.status_code != 200:
+            return None
+        return ((r.json().get("rootfs") or {}).get("diff_ids")) or None
+    except Exception as e:
+        print(f"[checker] registry error fetching config for {repo}: {e}")
+        return None
 
 
 def _manifest_download_size(manifest: dict | None) -> int | None:
@@ -1216,6 +1248,67 @@ def get_remote_image_id(image_name: str, local_platform: dict | None = None) -> 
 def get_remote_image_size(image_name: str, local_platform: dict | None = None) -> int | None:
     """Download size of the registry's current image for our platform (#24)."""
     return _manifest_download_size(_fetch_platform_manifest(image_name, local_platform))
+
+
+def get_remote_download_analysis(
+    image_name: str,
+    local_platform: dict | None = None,
+    local_diff_ids: set[str] | None = None,
+) -> dict | None:
+    """Split the pending pull into bytes that must actually be downloaded versus
+    layers already present locally.
+
+    The manifest lists each layer's compressed size keyed by its *compressed*
+    digest; the config lists the *uncompressed* diff_ids in the same order. A
+    layer whose diff_id is already among `local_diff_ids` is one Docker reports
+    as "Already exists" and does not transfer. Returns total_size (full
+    compressed pull), download_size (only the missing layers), layers_total and
+    layers_present — or None if the manifest can't be read. download_size /
+    layers_present are None when the breakdown can't be computed."""
+    manifest, registry, repo, token = _fetch_platform_manifest_ctx(image_name, local_platform)
+    if not manifest:
+        return None
+    layers = manifest.get("layers") or []
+    result = {
+        "total_size": _manifest_download_size(manifest),
+        "download_size": None,
+        "layers_total": len(layers) or None,
+        "layers_present": None,
+    }
+    if not layers or local_diff_ids is None:
+        return result
+    diff_ids = _fetch_config_diff_ids(registry, repo, manifest, token)
+    if not diff_ids or len(diff_ids) != len(layers):
+        return result
+    present = 0
+    download = 0
+    for layer, diff_id in zip(layers, diff_ids):
+        if diff_id in local_diff_ids:
+            present += 1
+        else:
+            download += int(layer.get("size") or 0)
+    result["download_size"] = download
+    result["layers_present"] = present
+    return result
+
+
+def _collect_local_diff_ids(client) -> set[str]:
+    """Union of every local image's layer diff_ids — the set of layer contents
+    this host already has, used to estimate how much of an update Docker will
+    really download. Each image must be inspected individually; the image list
+    summary omits RootFS."""
+    ids: set[str] = set()
+    try:
+        for img in client.images.list():
+            try:
+                info = client.api.inspect_image(img.id)
+            except Exception:
+                continue
+            for layer in (info.get("RootFS") or {}).get("Layers") or []:
+                ids.add(layer)
+    except Exception:
+        pass
+    return ids
 
 
 def get_local_image_size(container) -> int | None:
@@ -1301,6 +1394,7 @@ def is_locally_built(container) -> bool:
 def _scan_host(client, host_id: str) -> dict:
     """Scan one Docker host for image updates. Returns available dict."""
     available = {}
+    _local_diff_ids: set[str] | None = None  # union of local layer diff_ids, built on first update
     for container in client.containers.list():
         name = container.name
         if _is_helper_container(name):
@@ -1337,8 +1431,22 @@ def _scan_host(client, host_id: str) -> dict:
         if remote_digest:
             # The download size costs a manifest GET (which Docker Hub counts
             # against the pull rate limit), so only look it up when there is
-            # actually something to download (#24).
-            remote_size = get_remote_image_size(image_name, local_platform) if has_update else None
+            # actually something to download (#24). The layer breakdown adds one
+            # config-blob GET, comparing the update's diff_ids against the layers
+            # this host already has.
+            remote_size = None
+            download_size = None
+            layers_total = None
+            layers_present = None
+            if has_update:
+                if _local_diff_ids is None:
+                    _local_diff_ids = _collect_local_diff_ids(client)
+                analysis = get_remote_download_analysis(image_name, local_platform, _local_diff_ids)
+                if analysis:
+                    remote_size    = analysis["total_size"]
+                    download_size  = analysis["download_size"]
+                    layers_total   = analysis["layers_total"]
+                    layers_present = analysis["layers_present"]
             labels = container.labels or {}
             available[name] = {
                 "image": image_name,
@@ -1349,6 +1457,9 @@ def _scan_host(client, host_id: str) -> dict:
                 "compose_project": labels.get("com.docker.compose.project"),
                 "image_size": get_local_image_size(container),
                 "remote_size": remote_size,
+                "download_size": download_size,
+                "layers_total": layers_total,
+                "layers_present": layers_present,
             }
     return available
 
@@ -2432,6 +2543,9 @@ def api_status():
                 "compose_project": _compose,
                 "image_size": get_local_image_size(container),
                 "remote_size": info.get("remote_size") if status in ("update", "deferred") else None,
+                "download_size": info.get("download_size") if status in ("update", "deferred") else None,
+                "layers_total": info.get("layers_total") if status in ("update", "deferred") else None,
+                "layers_present": info.get("layers_present") if status in ("update", "deferred") else None,
                 "host_id": "local", "host_name": "Local",
             })
     except Exception as e:
@@ -2491,6 +2605,9 @@ def api_status():
                 "compose_project": cinfo.get("compose_project"),
                 "image_size": cinfo.get("image_size"),
                 "remote_size": cinfo.get("remote_size") if cstatus in ("update", "deferred") else None,
+                "download_size": cinfo.get("download_size") if cstatus in ("update", "deferred") else None,
+                "layers_total": cinfo.get("layers_total") if cstatus in ("update", "deferred") else None,
+                "layers_present": cinfo.get("layers_present") if cstatus in ("update", "deferred") else None,
                 "host_id": host_id, "host_name": host_name,
             })
 

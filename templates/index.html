@@ -121,6 +121,7 @@
   .compose-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--purple); white-space:nowrap; }
   .size-chip { white-space:nowrap; font-variant-numeric:tabular-nums; }
   .size-chip-dl { color:var(--blue); margin-left:-2px; }
+  .layers-chip { color:var(--muted); margin-left:-2px; }
 
   .badge-status { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:.4px; }
   .badge-update   { background:color-mix(in srgb, var(--orange) 15%, transparent); color:var(--orange); border:1px solid color-mix(in srgb, var(--orange) 30%, transparent); }
@@ -965,7 +966,16 @@
     let sizeChip = '';
     if (c.image_size) {
       sizeChip = `<span class="size-chip" title="${t('card.size_title')}">${fmtBytes(c.image_size)}</span>`;
-      if (c.remote_size) {
+      if (c.download_size != null && c.layers_total) {
+        const newLayers = c.layers_total - (c.layers_present || 0);
+        const analysisTitle = t('card.download_analysis_title', {
+          download: fmtBytes(c.download_size),
+          full: c.remote_size ? fmtBytes(c.remote_size) : '?',
+          newl: newLayers, total: c.layers_total, present: c.layers_present || 0,
+        });
+        sizeChip += `<span class="size-chip size-chip-dl" title="${analysisTitle}">↓ ${fmtBytes(c.download_size)}</span>`;
+        sizeChip += `<span class="size-chip layers-chip" title="${analysisTitle}">▤ ${newLayers}/${c.layers_total}</span>`;
+      } else if (c.remote_size) {
         sizeChip += `<span class="size-chip size-chip-dl" title="${t('card.download_title')}">↓ ${fmtBytes(c.remote_size)}</span>`;
       }
     }
