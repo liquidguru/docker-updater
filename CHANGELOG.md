@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.10] — 2026-09-17
+
+### Fixed
+- **Container cards were unreadable on phones** — the card put its info and its action buttons side by side, and on a narrow screen the badge + Update + Defer + Logs cluster is wider than half the width, so the info column collapsed to a sliver and every chip (size, download, layers, changelog link) wrapped onto its own line. Under 640px the actions now sit on their own row beneath the info, and the `·` separators are dropped so wrapped lines never start with a dot. Desktop layout is unchanged
+
 ## [1.15.9] — 2026-09-15
 
 ### Changed

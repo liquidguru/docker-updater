@@ -241,6 +241,15 @@
     .tabs { padding:10px 12px 0; gap:2px; }
     .tab { padding:6px 10px; font-size:12px; }
     main { padding:16px 12px 60px; }
+    /* Stack the card: info on top, actions on their own row. Side by side the
+       badge + Update + Defer + Logs cluster is wider than half a phone screen,
+       so the info column collapsed to a sliver and every meta chip wrapped
+       onto its own line. */
+    .container-card { grid-template-columns:1fr; gap:8px; }
+    .container-card.has-cb { grid-template-columns:auto 1fr; }
+    .card-actions { grid-column:1 / -1; justify-content:flex-start; }
+    .card-meta { gap:6px 10px; }
+    .card-meta .sep { display:none; }
   }
 </style>
 </head>
@@ -1030,7 +1039,7 @@
       <div class="card-info">
         <div class="card-name">${esc(c.name)}</div>
         <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
-        <div class="card-meta">${checkedAt}${sizeChip ? `<span>·</span>${sizeChip}` : ''}${hostChip ? `<span>·</span>${hostChip}` : ''}${composeChip ? `<span>·</span>${composeChip}` : ''}${whatsNew ? `<span>·</span>${whatsNew}` : ''}</div>
+        <div class="card-meta">${checkedAt}${sizeChip ? `<span class="sep">·</span>${sizeChip}` : ''}${hostChip ? `<span class="sep">·</span>${hostChip}` : ''}${composeChip ? `<span class="sep">·</span>${composeChip}` : ''}${whatsNew ? `<span class="sep">·</span>${whatsNew}` : ''}</div>
       </div>
       <div class="card-actions">${badge}${actions}${logsBtn}</div>
     </div>`;
