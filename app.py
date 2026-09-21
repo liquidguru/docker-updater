@@ -115,10 +115,11 @@ else:
 
 _state_lock    = threading.Lock()
 _check_lock    = threading.Lock()
-_logs_lock     = threading.Lock()   # guards _update_logs and _update_running
+_logs_lock     = threading.Lock()   # guards _update_logs, _update_running and _update_cancel
 _check_running = False
 _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
+_update_cancel: set[str] = set()    # keys whose in-flight pull the user asked to cancel
 _OWN_CONTAINER_ID: str | None = None  # set at startup via _detect_own_container()
 _OWN_HOSTNAME: str | None = None      # gethostname(), fallback self-update match
 
@@ -215,6 +216,7 @@ def _reserve_operation(name: str, host_id: str = "local") -> str | None:
             return None
         _update_running.add(key)
         _update_logs[key] = []
+        _update_cancel.discard(key)  # clear any stale flag from a prior run
     return key
 
 
@@ -1638,8 +1640,16 @@ def apply_update(container_name: str, host_id: str = "local",
         # rather than raising, so this must be treated as fatal — otherwise a
         # failed pull (bad auth, missing tag, network drop) would fall through
         # and we'd replace a working container using whatever image is present.
+        # Cancellation is only honoured here, during the pull, because nothing
+        # has been touched yet. Once we move on to stop/rename/recreate below,
+        # interrupting would risk leaving the container half-swapped.
         _pull_error = None
+        _pull_cancelled = False
         for chunk in client.api.pull(image_name, stream=True, decode=True):
+            with _logs_lock:
+                _pull_cancelled = key in _update_cancel
+            if _pull_cancelled:
+                break
             status = chunk.get("status", "")
             detail = chunk.get("progress", "") or chunk.get("error", "")
             if status in ("Pulling from", "Status: Image is up to date for",
@@ -1648,6 +1658,10 @@ def apply_update(container_name: str, host_id: str = "local",
             if "error" in chunk:
                 _pull_error = chunk.get("error") or str(chunk.get("errorDetail") or "unknown")
                 emit(f"  ERROR: {_pull_error}")
+        if _pull_cancelled:
+            emit("\nCANCELLED: Pull cancelled — no change to the container.")
+            emit(f"  '{container_name}' has NOT been touched and is still running.")
+            return
         if _pull_error:
             emit("\nERROR: Pull failed — aborting before any change to the container.")
             emit(f"  {_pull_error}")
@@ -1980,6 +1994,7 @@ def apply_update(container_name: str, host_id: str = "local",
         _persist_log(key, container_name, host_id)
         with _logs_lock:
             _update_running.discard(key)
+            _update_cancel.discard(key)
 
 
 # ── Rollback ─────────────────────────────────────────────────────────────────
@@ -2662,7 +2677,8 @@ def api_status():
 
     hosts_full = [{"id": "local", "name": "Local",
                    "url": "unix:///var/run/docker.sock",
-                   "status": "online", "last_check": state.get("last_check")}
+                   "status": "online", "last_check": state.get("last_check"),
+                   "builtin": True}
                   ] + remote_hosts_info
 
     return jsonify({
@@ -2691,6 +2707,22 @@ def api_update(name):
         return jsonify({"error": "Already updating"}), 409
     threading.Thread(target=apply_update, args=(name, host_id),
                      kwargs={"reserved": True}, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/update/<name>/cancel", methods=["POST"])
+def api_update_cancel(name):
+    """Ask an in-flight update to abort. Only effective during the image pull:
+    once recreation has begun there's no safe stop point, so a late request is
+    accepted but simply finds no pull left to interrupt."""
+    host_id = request.args.get("host", "local")
+    key     = _container_key(name, host_id)
+    with _logs_lock:
+        running = key in _update_running
+        if running:
+            _update_cancel.add(key)
+    if not running:
+        return jsonify({"error": "No update in progress"}), 404
     return jsonify({"ok": True})
 
 
@@ -3095,8 +3127,8 @@ def api_hosts_add():
         return jsonify({"error": "name and url are required"}), 400
     hosts  = load_hosts()
     host_id = re.sub(r"[^a-z0-9_-]", "-", name.lower())[:32]
-    # ensure unique id
-    existing_ids = {h["id"] for h in hosts}
+    # ensure unique id ('local' is reserved for the built-in host)
+    existing_ids = {h["id"] for h in hosts} | {"local"}
     base_id, i = host_id, 1
     while host_id in existing_ids:
         host_id = f"{base_id}-{i}"; i += 1
