@@ -408,6 +408,7 @@
   let multiHost = false;   // true when >1 host configured
   let currentTab = 'update';
   let selectedNames = new Set();
+  let cancellingKeys = new Set();   // container keys with a cancel request in flight
   let logPollTimer = null;
   let logTarget = null;    // {name, hostId}
   let refreshTimer = null;
@@ -872,6 +873,11 @@
       );
       selectedNames.forEach(k => { if (!updatable.has(k)) selectedNames.delete(k); });
 
+      const stillUpdating = new Set(
+        allContainers.filter(c => c.updating).map(c => `${c.host_id}:${c.name}`)
+      );
+      cancellingKeys.forEach(k => { if (!stillUpdating.has(k)) cancellingKeys.delete(k); });
+
       renderAll(data);
       const banner = document.getElementById('checking-banner');
       data.check_running ? banner.classList.add('visible') : banner.classList.remove('visible');
@@ -1016,7 +1022,11 @@
 
     let actions = '';
     if (isUpdating) {
-      actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.log')}</button>`;
+      const cancelBtn = cancellingKeys.has(selKey)
+        ? `<button class="btn-danger btn-sm" disabled>${t('btn.cancelling')}</button>`
+        : `<button class="btn-danger btn-sm" onclick="cancelUpdate('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.cancel_update')}</button>`;
+      actions = `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.log')}</button>
+                 ${cancelBtn}`;
     } else {
       if (c.has_logs) actions += `<button class="btn-secondary btn-sm" onclick="openLogModal('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.log')}</button>`;
       if (c.has_rollback && !isUpdating) {
@@ -1107,7 +1117,7 @@
 
     const panel = document.getElementById('hosts-panel');
     const hostsHTML = allHosts.map(h => {
-      const isLocal  = h.id === 'local';
+      const isLocal  = h.builtin === true;
       const cls      = isLocal ? 'local' : `remote-${h.status || 'unknown'}`;
       const displayName = isLocal ? t('hosts.local') : h.name;
       const statusLabel = isLocal ? t('hosts.local')
@@ -1577,11 +1587,13 @@
       out.innerHTML = data.logs.map(line => {
         if (line.startsWith('SUCCESS')) return `<span class="log-success">${esc(line)}</span>`;
         if (line.startsWith('ERROR'))   return `<span class="log-error">${esc(line)}</span>`;
+        if (line.includes('CANCELLED')) return `<span class="log-error">${esc(line)}</span>`;
         if (line.startsWith('▶'))       return `<span class="log-section">${esc(line)}</span>`;
         return esc(line);
       }).join('\n');
       out.scrollTop = out.scrollHeight;
       const statusEl = document.getElementById('log-status-text');
+      const wasCancelled = data.logs.some(l => l.includes('CANCELLED'));
       if (data.running) {
         statusEl.textContent = t('status.running');
         logPollTimer = setTimeout(pollLogs, 800);
@@ -1592,13 +1604,27 @@
           return;
         }
         const last = data.logs[data.logs.length-1] || '';
-        statusEl.textContent = last.startsWith('SUCCESS') ? t('status.complete') : last.startsWith('ERROR') ? t('status.failed') : t('status.done');
+        statusEl.textContent = wasCancelled ? t('status.cancelled')
+          : last.startsWith('SUCCESS') ? t('status.complete')
+          : last.startsWith('ERROR') ? t('status.failed')
+          : t('status.done');
         loadSettings();
         fetchStatus();
       }
     } catch (e) {
       logPollTimer = setTimeout(pollLogs, 2000);
     }
+  }
+
+  async function cancelUpdate(name, hostId = 'local') {
+    const selKey = `${hostId}:${name}`;
+    if (cancellingKeys.has(selKey)) return;  // already cancelling — ignore repeat clicks
+    cancellingKeys.add(selKey);
+    renderContainerList(allContainers, currentTab);  // instant: button → disabled “Cancelling…”
+    try {
+      await fetch(`/api/update/${encodeURIComponent(name)}/cancel?host=${encodeURIComponent(hostId)}`, {method:'POST'});
+    } catch (e) { /* the next status poll will reflect the outcome */ }
+    fetchStatus();
   }
 
   // ── Notify banner ─────────────────────────────────────────────────────────
