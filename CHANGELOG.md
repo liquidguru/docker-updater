@@ -2,6 +2,15 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.11] — 2026-09-22
+
+### Added
+- **Cancel an in-progress update** — a **Cancel update** button on the container card while an image is pulling. Cancellation is honoured *only* during the pull, before the container is stopped or recreated, so a cancelled update leaves the running container completely untouched — the same guarantee a failed pull already gave. The download is genuinely aborted, not just left running in the background. Contributed via PR #27
+
+### Fixed
+- **A host you named "Local" became undeletable** — `/api/status` prepends a built-in host with the id `local`, but the id generator only checked *saved* hosts, so a user-added host whose name slugged to `local` collided with it. The Hosts tab then treated it as the built-in host and rendered no Test or Remove button, leaving it stuck there, and its containers double-listed under the shared host key. `local` is now reserved, and the built-in host is identified by an explicit `builtin` flag rather than by its id (PR #27)
+- **`SshConfigSetupTests` only worked on Linux** — the tests patched `HOME`, but `ntpath.expanduser()` checks `USERPROFILE` first and ignores `HOME`, so on Windows they resolved to the developer's real `~/.ssh`: failing there, and on a machine with no `~/.ssh/config` actually writing one into it. Both variables are now patched. The full suite passes on Windows again (found while reviewing #27)
+
 ## [1.15.10] — 2026-09-17
 
 ### Fixed

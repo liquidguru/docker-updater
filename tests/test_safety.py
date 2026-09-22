@@ -506,8 +506,13 @@ class SshConfigSetupTests(SafetyTestBase):
 
     def _run(self, home, data_dir):
         mod = self.mod
+        # USERPROFILE as well as HOME: ntpath.expanduser() checks USERPROFILE
+        # first and ignores HOME entirely, so patching only HOME left these
+        # tests pointing at the developer's real ~/.ssh on Windows — failing
+        # there, and on a machine with no ~/.ssh/config actually writing one.
+        env = {"HOME": home, "USERPROFILE": home}
         with mock.patch.object(mod, "DATA_DIR", data_dir), \
-             mock.patch.dict(mod.os.environ, {"HOME": home}):
+             mock.patch.dict(mod.os.environ, env):
             mod._setup_ssh_config()
 
     def test_read_only_ssh_dir_does_not_raise(self):
