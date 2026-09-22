@@ -445,6 +445,13 @@ mkdir -p data
 docker compose up -d   # 使用仓库中的 build: . Compose 配置
 ```
 
+提交 PR 前请先运行测试：
+
+```bash
+python -m unittest discover -s tests -v
+node --check static/i18n.js
+```
+
 ---
 
 ## 替换 Watchtower
