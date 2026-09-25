@@ -96,6 +96,9 @@ class FakeDocker:
     def by_id(self, cid):
         return next((c for c in self.registry.values() if c.id == cid), None)
 
+    def ping(self):
+        return True
+
     def _update_container(self, cid, restart_policy=None, **_):
         c = self.by_id(cid)
         if c is not None and restart_policy is not None:
@@ -651,6 +654,127 @@ class DeferredNotificationTests(SafetyTestBase):
         )
         self.assertIn("db", sent.get("body", ""))
         self.assertNotIn("web", sent.get("body", ""))
+
+
+class BackupSweepTests(SafetyTestBase):
+    """Kept backups must be retired on every host, and a backup kept only
+    because a healthcheck hadn't passed yet must not outlive that (issue #28)."""
+
+    PAST, FUTURE = "2000-01-01T00:00:00Z", "2999-01-01T00:00:00Z"
+
+    def _sweep(self, d, rollbacks, host_id="local"):
+        return self.mod._sweep_backups(d, rollbacks, host_id, False, log=lambda *_: None)
+
+    def test_expired_backup_is_removed(self):
+        d = FakeDocker(self.mod)
+        d.new("web")
+        old = d.new("web_old", status="exited")
+        drop = self._sweep(d, {"web": {"expires_at": self.PAST, "reason": "retention"}})
+        self.assertEqual(drop, ["web"])
+        self.assertTrue(old.removed)
+
+    def test_entry_whose_backup_is_already_gone_is_purged(self):
+        d = FakeDocker(self.mod)
+        d.new("web")
+        drop = self._sweep(d, {"web": {"expires_at": self.FUTURE}})
+        self.assertEqual(drop, ["web"])
+
+    def test_health_hold_is_released_once_the_replacement_is_healthy(self):
+        """The heart of #28: retention off, healthcheck merely slow to pass."""
+        d = FakeDocker(self.mod)
+        d.new("web", health="healthy")
+        old = d.new("web_old", status="exited")
+        drop = self._sweep(d, {"web": {"expires_at": self.FUTURE, "reason": "health"}})
+        self.assertEqual(drop, ["web"])
+        self.assertTrue(old.removed, "backup kept although the replacement is healthy")
+
+    def test_health_hold_survives_while_the_healthcheck_is_still_starting(self):
+        d = FakeDocker(self.mod)
+        d.new("web", health="starting")
+        old = d.new("web_old", status="exited")
+        self.assertEqual(self._sweep(d, {"web": {"expires_at": self.FUTURE, "reason": "health"}}), [])
+        self.assertFalse(old.removed)
+
+    def test_health_hold_survives_an_unhealthy_replacement(self):
+        """Exactly the case the backup exists for."""
+        d = FakeDocker(self.mod)
+        d.new("web", health="unhealthy")
+        old = d.new("web_old", status="exited")
+        self.assertEqual(self._sweep(d, {"web": {"expires_at": self.FUTURE, "reason": "health"}}), [])
+        self.assertFalse(old.removed)
+
+    def test_retention_backup_is_never_released_early(self):
+        """The user asked for backups — a healthy replacement doesn't cut the window short."""
+        d = FakeDocker(self.mod)
+        d.new("web", health="healthy")
+        old = d.new("web_old", status="exited")
+        self.assertEqual(self._sweep(d, {"web": {"expires_at": self.FUTURE, "reason": "retention"}}), [])
+        self.assertFalse(old.removed)
+
+    def test_backup_with_an_operation_in_flight_is_left_alone(self):
+        """A rollback may be promoting that very _old container."""
+        d = FakeDocker(self.mod)
+        d.new("web")
+        old = d.new("web_old", status="exited")
+        self.mod._update_running.add("web")
+        drop = self._sweep(d, {"web": {"expires_at": self.PAST}})
+        self.assertEqual(drop, [])
+        self.assertFalse(old.removed)
+
+    def test_remote_hosts_are_swept(self):
+        """Remote backups were never expired, shown, or cleaned (#28)."""
+        mod = self.mod
+        d = FakeDocker(mod)
+        d.new("web")
+        old = d.new("web_old", status="exited")
+        host_state = {"rollbacks": {"web": {"expires_at": self.PAST}}}
+        saved = {}
+        with mock.patch.object(mod, "load_hosts", return_value=[{"id": "site-b", "url": "ssh://x"}]), \
+             mock.patch.object(mod, "load_host_state", side_effect=lambda _h: host_state), \
+             mock.patch.object(mod, "save_host_state", side_effect=lambda h, s: saved.update({h: s})), \
+             mock.patch.object(mod, "get_docker_client", return_value=d), \
+             mock.patch.object(mod, "load_state", return_value={"cleanup_images": False}):
+            mod.sweep_remote_backups()
+        self.assertTrue(old.removed, "remote backup was not swept")
+        self.assertNotIn("web", saved["site-b"]["rollbacks"])
+
+    def test_timer_sweeps_the_local_host_without_the_dashboard_open(self):
+        """/api/status only sweeps while someone is looking; the timer must too."""
+        mod = self.mod
+        d = FakeDocker(mod)
+        d.new("web", health="healthy")
+        old = d.new("web_old", status="exited")
+        state = {"rollbacks": {"web": {"expires_at": self.FUTURE, "reason": "health"}},
+                 "cleanup_images": False}
+        with mock.patch.object(mod.docker, "from_env", return_value=d, create=True), \
+             mock.patch.object(mod, "load_state", side_effect=lambda: state), \
+             mock.patch.object(mod, "save_state"), \
+             mock.patch.object(mod, "load_hosts", return_value=[]):
+            mod.sweep_all_backups()
+        self.assertTrue(old.removed, "timer did not release the local health hold")
+        self.assertNotIn("web", state["rollbacks"])
+
+    def test_next_check_reports_the_update_check_not_the_sweep(self):
+        """get_jobs()[0] is whichever job runs soonest — the 15-minute sweep —
+        so the dashboard claimed the next check was 15 minutes away."""
+        mod = self.mod
+        sweep = mock.Mock(id="backup_sweep", next_run_time=mock.Mock(isoformat=lambda: "SOON"))
+        check = mock.Mock(id="update_check", next_run_time=mock.Mock(isoformat=lambda: "3AM"))
+        sched = mock.Mock()
+        sched.get_jobs.return_value = [sweep, check]
+        sched.get_job.side_effect = lambda jid: {"backup_sweep": sweep, "update_check": check}.get(jid)
+        with mock.patch.object(mod, "_scheduler", sched):
+            self.assertEqual(mod._next_check_time(), "3AM")
+
+    def test_hosts_without_backups_are_not_contacted(self):
+        """The sweep runs every 15 min; it must not SSH to every host each time."""
+        mod = self.mod
+        with mock.patch.object(mod, "load_hosts", return_value=[{"id": "site-b", "url": "ssh://x"}]), \
+             mock.patch.object(mod, "load_host_state", return_value={"rollbacks": {}}), \
+             mock.patch.object(mod, "get_docker_client") as connect, \
+             mock.patch.object(mod, "load_state", return_value={}):
+            mod.sweep_remote_backups()
+        connect.assert_not_called()
 
 
 class StaleContainerDetectionTests(SafetyTestBase):

@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.12] — 2026-09-25
+
+### Fixed
+- **Backups on remote hosts were never expired, shown, or cleaned up** — an update on a remote host kept its `{name}_old` container and recorded it in that host's state, but the expiry sweep only ever looked at the local daemon and local state, and remote container cards carried no backup field at all. So the backup had no Rollback or Delete button, never appeared on the Backups tab, and never expired: it stayed until someone deleted it by hand — which in turn orphaned its image, since docker-updater never learned the backup was gone. Remote backups now appear on the Backups tab, and a background sweep every 15 minutes expires them and removes their images. It only connects to hosts that actually have a backup outstanding (#28)
+- **Containers with a HEALTHCHECK kept a backup on every update, even with backup retention off** — an update watches the new container for about 4 seconds, and a healthcheck that hasn't passed yet keeps the old container rather than destroying the only way back. But almost no healthcheck passes that fast (Docker's default interval is 30s), so every such container kept an `_old` it was never asked to. Those backups are now released automatically as soon as the new container reports `healthy`; one that reports `unhealthy` keeps its backup, since that's exactly when you'd want it. Backups kept because retention is on are unaffected and still last the full window (#28)
+- **An updated container on a remote host disappeared from the list until the next check** — it was dropped from that host's results rather than marked current, and with it any backup it had just made. It now stays listed as up to date
+- Local backups are now also swept on the 15-minute timer, not only when someone has the dashboard open — on a headless install, a backup waiting on a healthcheck would otherwise have sat there until the next page load
+
 ## [1.15.11] — 2026-09-22
 
 ### Added

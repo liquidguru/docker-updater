@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.11"
+APP_VERSION          = "1.15.12"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -501,6 +501,125 @@ def _cleanup_old_image(client, old_image_id: str | None, new_image_id: str | Non
         pass
     except Exception as e:
         emit(f"  (old image not removed: {e})")
+
+
+def _sweep_backups(client, rollbacks: dict, host_id: str, cleanup_images: bool,
+                   log=print) -> list[str]:
+    """Retire kept backups on one host. Returns the names whose rollback entry
+    should be dropped from that host's state.
+
+    - `{name}_old` already gone → the entry is stale; drop it.
+    - Past `expires_at` → remove `{name}_old` (and its image, if cleanup is on).
+    - Held *only* because a healthcheck hadn't passed yet (retention off,
+      `reason == "health"`) and the replacement now reports `healthy` → release
+      it now rather than at expiry. The update polls for ~4s and almost no
+      healthcheck passes that fast, so without this every container with a
+      HEALTHCHECK kept an unwanted backup for the full window (issue #28).
+      An `unhealthy` replacement keeps its backup — that is exactly when it's
+      needed.
+
+    Containers with an operation in flight are skipped: a rollback may be
+    promoting that very `_old` container.
+    """
+    tag = "local" if host_id == "local" else host_id
+    now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+    drop = []
+    for name, rb in list(rollbacks.items()):
+        with _logs_lock:
+            if _container_key(name, host_id) in _update_running:
+                continue
+        try:
+            old_c = client.containers.get(f"{name}_old")
+        except docker.errors.NotFound:
+            log(f"[cleanup:{tag}] Purging stale rollback (no {name}_old): {name}")
+            drop.append(name)
+            continue
+        except Exception:
+            continue  # transient error — never purge on a guess
+
+        expired = rb.get("expires_at", "") <= now_iso
+        released = False
+        if not expired and rb.get("reason") == "health":
+            try:
+                live = client.containers.get(name)
+                health = (((live.attrs.get("State") or {}).get("Health") or {})
+                          .get("Status") or "").lower()
+                released = health == "healthy"
+            except Exception:
+                released = False
+        if not (expired or released):
+            continue
+        try:
+            image_id = old_c.image.id
+            old_c.remove()
+            why = "expired" if expired else "replacement is now healthy"
+            log(f"[cleanup:{tag}] Removed backup {name}_old ({why})")
+            drop.append(name)
+            if cleanup_images:
+                _cleanup_old_image(client, image_id, None, log)
+        except Exception as e:
+            log(f"[cleanup:{tag}] Error removing {name}_old: {e}")
+    return drop
+
+
+def sweep_local_backups() -> None:
+    """Retire kept backups on the local host — expired, stale, or held only for
+    a healthcheck that has since passed. See _sweep_backups for the rules."""
+    with _state_lock:
+        state = load_state()
+    try:
+        drop = _sweep_backups(docker.from_env(), state.get("rollbacks", {}), "local",
+                              state.get("cleanup_images", False))
+    except Exception as e:
+        print(f"[cleanup] Docker unavailable: {e}")
+        return
+    if drop:
+        with _state_lock:
+            state = load_state()
+            for name in drop:
+                state.get("rollbacks", {}).pop(name, None)
+            save_state(state)
+
+
+def sweep_all_backups() -> None:
+    """Timer entry point. /api/status sweeps the local host too, but only while
+    someone has the dashboard open — on a headless install, a backup waiting on
+    a healthcheck would otherwise sit there until the next page load."""
+    sweep_local_backups()
+    sweep_remote_backups()
+
+
+def sweep_remote_backups() -> None:
+    """Expire backups on remote hosts (issue #28).
+
+    The sweep in /api/status only ever touched the local daemon and local
+    state, so a backup made on a remote host was never expired, never shown,
+    and never cleaned up — it lingered until someone deleted it by hand, which
+    in turn orphaned its image. Runs on a timer rather than from /api/status,
+    which the UI polls every few seconds: a remote host is usually SSH, and
+    opening a connection per poll per host is not acceptable. Hosts with no
+    kept backups are skipped without connecting at all.
+    """
+    with _state_lock:
+        cleanup_images = load_state().get("cleanup_images", False)
+    for host in load_hosts():
+        host_id = host["id"]
+        if not load_host_state(host_id).get("rollbacks"):
+            continue
+        try:
+            client = get_docker_client(host.get("url"))
+            client.ping()
+        except Exception as e:
+            print(f"[cleanup:{host_id}] unreachable, backup sweep skipped: {e}")
+            continue
+        drop = _sweep_backups(client, load_host_state(host_id).get("rollbacks", {}),
+                              host_id, cleanup_images)
+        if drop:
+            with _state_lock:
+                hs = load_host_state(host_id)
+                for name in drop:
+                    hs.setdefault("rollbacks", {}).pop(name, None)
+                save_host_state(host_id, hs)
 
 
 def _is_own_container(container) -> bool:
@@ -1875,11 +1994,12 @@ def apply_update(container_name: str, host_id: str = "local",
                 if _backup_enabled:
                     emit(f"  Backup '{old_name}' kept for {_backup_hours}h — rollback available.")
                 else:
-                    emit(f"  {_why.capitalize()} — keeping '{old_name}' as a backup "
-                         f"for {_backup_hours}h rather than removing it.")
+                    emit(f"  {_why.capitalize()} — keeping '{old_name}' until the "
+                         f"new container reports healthy (at most {_backup_hours}h), "
+                         f"rather than removing the only way back now.")
                 if _cleanup_images:
                     emit("  Old image kept while that backup exists. It will be "
-                         "removed when the backup is deleted or expires.")
+                         "removed when the backup is released, deleted or expires.")
             else:
                 emit("▶ Removing old container...")
                 old_container.remove()
@@ -1939,6 +2059,10 @@ def apply_update(container_name: str, host_id: str = "local",
             "backed_up_at": datetime.datetime.utcnow().isoformat() + "Z",
             "expires_at": _expires,
             "restart_policy": hcfg.get("RestartPolicy", {"Name": "unless-stopped"}),
+            # "health": kept only because the healthcheck hadn't passed yet, so
+            # the sweep may release it early once it does. "retention": the
+            # user asked for backups — keep for the full window regardless.
+            "reason": "retention" if _backup_enabled else "health",
         } if _keep_backup else None
         if host_id == "local":
             with _state_lock:
@@ -1953,7 +2077,15 @@ def apply_update(container_name: str, host_id: str = "local",
                 save_state(state)
         else:
             hs = load_host_state(host_id)
-            hs["available"].pop(container_name, None)
+            # Mark it current rather than dropping it. A local card is built
+            # from the live container list, but a remote card only exists while
+            # the container is in `available` — popping it made an updated
+            # remote container vanish until the next check, taking its Rollback
+            # and Delete-backup buttons with it (issue #28).
+            _entry = hs.setdefault("available", {}).get(container_name)
+            if _entry:
+                _entry["has_update"] = False
+                _entry["local_digest"] = _entry.get("remote_digest")
             hs.setdefault("history", []).insert(0, history_entry)
             hs["history"] = hs["history"][:50]
             if rollback_entry:
@@ -2608,6 +2740,14 @@ def api_status():
                 is_updating = key in _update_running
                 has_logs    = key in _update_logs
             _h_cl_override = hs.get("changelog_urls", {}).get(cname)
+            # Remote backups were never surfaced, so they had no Rollback or
+            # Delete-backup button and couldn't be seen at all (issue #28).
+            # Not verified against the remote daemon here — that would mean a
+            # connection per host per poll; sweep_remote_backups() purges any
+            # entry whose _old has gone.
+            _h_rb = hs.get("rollbacks", {}).get(cname)
+            _h_now = datetime.datetime.utcnow().isoformat() + "Z"
+            _h_has_rb = bool(_h_rb and _h_rb.get("expires_at", "") > _h_now)
             containers.append({
                 "name": cname, "image": cinfo.get("image", ""),
                 "status": cstatus,
@@ -2623,53 +2763,17 @@ def api_status():
                 "download_size": cinfo.get("download_size") if cstatus in ("update", "deferred") else None,
                 "layers_total": cinfo.get("layers_total") if cstatus in ("update", "deferred") else None,
                 "layers_present": cinfo.get("layers_present") if cstatus in ("update", "deferred") else None,
+                "has_rollback": _h_has_rb,
+                "rollback_expires": _h_rb.get("expires_at") if _h_has_rb and _h_rb else None,
                 "host_id": host_id, "host_name": host_name,
             })
 
         all_history.extend(hs.get("history", []))
 
-    # Clean up rollback backups: purge entries that are expired (remove the
-    # _old container) or orphaned (the _old container no longer exists, e.g.
-    # an interrupted rollback). Keeps the Backups tab in sync with reality.
-    now_iso = datetime.datetime.utcnow().isoformat() + "Z"
-    with _state_lock:
-        _cleanup_state = load_state()
-    _cleanup_client = None
-    try:
-        _cleanup_client = docker.from_env()
-    except Exception as _ce:
-        print(f"[cleanup] Docker unavailable: {_ce}")
-    _stale_rbs = []
-    if _cleanup_client is not None:
-        for _rb_name, _rb in _cleanup_state.get("rollbacks", {}).items():
-            _expired = _rb.get("expires_at", "") <= now_iso
-            _old_c = None
-            try:
-                _old_c = _cleanup_client.containers.get(f"{_rb_name}_old")
-                _old_exists = True
-            except docker.errors.NotFound:
-                _old_exists = False
-            except Exception:
-                _old_exists = True  # transient error: do not purge
-            if not _old_exists:
-                print(f"[cleanup] Purging stale rollback (no {_rb_name}_old): {_rb_name}")
-                _stale_rbs.append(_rb_name)
-            elif _expired:
-                try:
-                    _rb_image_id = _old_c.image.id
-                    _old_c.remove()
-                    print(f"[cleanup] Removed expired backup: {_rb_name}_old")
-                    _stale_rbs.append(_rb_name)
-                    if _cleanup_state.get("cleanup_images", False):
-                        _cleanup_old_image(_cleanup_client, _rb_image_id, None, print)
-                except Exception as _re:
-                    print(f"[cleanup] Error removing {_rb_name}_old: {_re}")
-    if _stale_rbs:
-        with _state_lock:
-            _cs = load_state()
-            for _rb_name in _stale_rbs:
-                _cs.get("rollbacks", {}).pop(_rb_name, None)
-            save_state(_cs)
+    # Keep the Backups tab honest on every load. Cheap — it's the local socket.
+    # The same sweep also runs on a timer (sweep_all_backups), so nothing waits
+    # for someone to open the dashboard; remote hosts are only swept there.
+    sweep_local_backups()
 
     ORDER = {"update": 0, "deferred": 1, "unknown": 2, "ok": 3}
     containers.sort(key=lambda c: (ORDER.get(c["status"], 9), c["host_name"], c["name"]))
@@ -3269,8 +3373,11 @@ def _next_check_time() -> str | None:
     if _scheduler is None:
         return None
     try:
-        job = _scheduler.get_jobs()[0]
-        nf  = job.next_run_time
+        # By id, not get_jobs()[0]: that returns whichever job runs soonest,
+        # and the 15-minute backup sweep (issue #28) always beats a daily check
+        # — so the dashboard reported the next check as 15 minutes away.
+        job = _scheduler.get_job("update_check")
+        nf  = job.next_run_time if job else None
         return nf.isoformat() if nf else None
     except Exception:
         return None
@@ -3412,6 +3519,12 @@ if __name__ == "__main__":
         check_for_updates, _build_check_trigger(),
         id="update_check", replace_existing=True,
         kwargs={"notify": True},
+    )
+    # Retire kept backups on every host (issue #28). Only connects to remote
+    # hosts that actually have a backup outstanding, so it's usually a no-op.
+    _scheduler.add_job(
+        sweep_all_backups, "interval", minutes=15,
+        id="backup_sweep", replace_existing=True,
     )
     _scheduler.start()
     _spec, _source = _active_check_spec()
