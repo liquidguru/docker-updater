@@ -820,8 +820,32 @@
   }
 
   async function confirmRollback(name, hostId = 'local') {
-    if (!(await showConfirm(t('confirm.rollback', {name})))) return;
+    const warning = await rollbackDataWarning(name, hostId);
+    const msg = t('confirm.rollback', {name}) + (warning ? '\n\n' + warning : '');
+    if (!(await showConfirm(msg))) return;
     startRollback(name, hostId);
+  }
+
+  // Rollback restores the container, not the data in its mounts. An app that
+  // migrated its database on first start can leave the old version unable to
+  // read it (Homarr v1 → v2 did exactly this). Name the writable mounts so it's
+  // clear what won't be reverted; if they can't be read, warn anyway rather
+  // than let the rollback look complete.
+  async function rollbackDataWarning(name, hostId) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      const r = await fetch(`/api/backup/${encodeURIComponent(name)}/mounts?host=${encodeURIComponent(hostId)}`,
+                            {signal: ctl.signal});
+      clearTimeout(timer);
+      const d = await r.json();
+      if (!r.ok || !Array.isArray(d.mounts)) throw new Error(d.error || String(r.status));
+      if (!d.mounts.length) return '';
+      const list = d.mounts.map(m => `• ${m.source} → ${m.destination}`).join('\n');
+      return t('confirm.rollback_data', {mounts: list});
+    } catch (e) {
+      return t('confirm.rollback_data_unknown');
+    }
   }
 
   async function startRollback(name, hostId = 'local') {

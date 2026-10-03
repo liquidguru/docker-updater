@@ -410,6 +410,17 @@ Backups are self-managing: each entry is verified against its actual `_old` cont
 
 Backup containers have their restart policy set to `no` the moment they are created, so a host reboot never starts both the live container and its backup at the same time (which would cause port conflicts and duplicate processes). The original policy is saved and restored automatically when rolling back.
 
+### ⚠️ Rollback restores the container, not its data
+
+A rollback swaps the container back to the previous image and configuration. It does **not** revert anything in the container's volumes or bind mounts — those keep whatever the newer version wrote to them.
+
+That matters for any app that migrates its data on first start. Homarr, Sonarr/Radarr, Immich, Nextcloud and many others upgrade their database schema in place, so a rollback after that can leave the previous version unable to start: it can't read data the newer version has already converted.
+
+- **Before updating an app like that, back up its data** — stop it and copy its data directory, or use the app's own backup feature. docker-updater can't safely do this for you, because copying a live database while the app is running can produce a corrupt copy.
+- **If a rolled-back app won't start**, restore its data from that backup, then start it again.
+
+The **Rollback** dialog lists the writable mounts that won't be reverted, so you can see what's at stake before you confirm.
+
 ### Crash-safe (startup recovery)
 
 Updates and rollbacks run in a background thread. If docker-updater is restarted *while one is in progress* (a manual restart, a host reboot, even its own self-update), that thread is killed mid-flight — which could otherwise leave a container half-updated or stopped.
@@ -477,6 +488,7 @@ docker rm watchtower
 - **Images orphaned by an out-of-band pull**: If something else pulls a tag your container already uses — another tool, or a manual `docker pull` — the tag moves on and the container keeps running the old image. Depending on your image store, that leftover image can end up with no tag and no digest. docker-updater falls back to comparing image IDs in that case, so the container is still flagged rather than silently ignored.
 - **Private registries**: Supports anonymous and Bearer-token registries, plus authenticated Docker Hub (see [Docker Hub rate limits](#docker-hub-rate-limits)). Credentials for other registries are not yet supported — if you need them, open an issue saying which registry.
 - **Breaking changes in new versions**: docker-updater preserves the environment variables your container was running with, but cannot detect when a new image version introduces new required ones. If the container *crashes* as a result it will be caught and rolled back automatically — but an image that starts cleanly and is only broken at the application level will pass the health check, so still check release notes for new required env vars.
+- **Rollback doesn't restore data**: a rollback swaps the container and image back, but volumes and bind mounts keep whatever the newer version wrote. If that version migrated its data on first start, the previous one may not start at all. Back up the data of apps that migrate before updating them — see [Backup & rollback](#backup--rollback).
 - **Health verification is shallow**: a replacement is confirmed by watching its Docker state (and its HEALTHCHECK, if the image defines one) — not by testing whether your service actually works. A container that runs happily while serving errors is indistinguishable from a good one. If an image's healthcheck is slow to pass — most take 10–60s, and the update only watches for a few seconds — the update stands and the previous container is held until the healthcheck passes, then removed. If it reports `unhealthy` instead, the backup stays so you can roll back.
 - **host network mode**: Containers using `--network host` are recreated correctly; the network reconnect step is skipped for these.
 - **Backup retention & disk space**: with backup retention enabled, each backup keeps a stopped container and its previous image layers until the backup expires (or you delete it from the Backups tab). On hosts with limited disk, keep the retention window short or delete backups once you're confident in an update. Note that a backup is also kept **even with retention off** when a replacement's health couldn't be positively confirmed — deliberately, so there's still a way back — so the occasional `_old` container may appear that you didn't ask for. It shows in the Backups tab and expires on the normal schedule.

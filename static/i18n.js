@@ -91,7 +91,7 @@
       <button type="button" class="btn-ghost" id="app-dialog-x" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
     </div>
     <div class="modal-body" style="padding:16px 18px">
-      <p id="app-dialog-message" style="white-space:pre-wrap;font-size:13px;line-height:1.55;margin:0;color:var(--text)"></p>
+      <p id="app-dialog-message" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55;margin:0;color:var(--text)"></p>
     </div>
     <div class="modal-footer" id="app-dialog-footer"></div>
   </div>

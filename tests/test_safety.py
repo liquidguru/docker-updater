@@ -777,6 +777,53 @@ class BackupSweepTests(SafetyTestBase):
         connect.assert_not_called()
 
 
+class RollbackDataWarningTests(SafetyTestBase):
+    """Rollback swaps the container back but leaves mounted data as the newer
+    version left it. Homarr v1→v2 migrated its SQLite DB on first start, and the
+    rolled-back v1 then crash-looped on it. The Rollback dialog names the
+    mounts that won't be reverted."""
+
+    MOUNTS = [
+        {"Type": "bind", "Source": "/volume1/docker/homarr/db", "Destination": "/appdata/db", "RW": True},
+        {"Type": "volume", "Name": "homarr_cache", "Source": "/var/lib/docker/volumes/homarr_cache/_data",
+         "Destination": "/cache", "RW": True},
+        {"Type": "bind", "Source": "/volume1/docker/homarr/config.yml", "Destination": "/config.yml", "RW": False},
+        {"Type": "tmpfs", "Destination": "/tmp", "RW": True},
+        {"Type": "bind", "Source": "/var/run/docker.sock", "Destination": "/var/run/docker.sock", "RW": True},
+    ]
+
+    def test_only_writable_data_mounts_are_reported(self):
+        got = self.mod._writable_data_mounts({"Mounts": self.MOUNTS})
+        self.assertEqual(got, [
+            {"type": "bind", "source": "/volume1/docker/homarr/db", "destination": "/appdata/db"},
+            # a named volume is shown by name, not its /var/lib/docker path
+            {"type": "volume", "source": "homarr_cache", "destination": "/cache"},
+        ])
+
+    def test_no_mounts_means_no_warning(self):
+        self.assertEqual(self.mod._writable_data_mounts({}), [])
+        self.assertEqual(self.mod._writable_data_mounts({"Mounts": None}), [])
+
+    def test_endpoint_reads_the_backup_that_will_be_restored(self):
+        mod = self.mod
+        d = FakeDocker(mod)
+        d.registry["homarr"] = mock.Mock(attrs={"Mounts": []})
+        d.registry["homarr_old"] = mock.Mock(attrs={"Mounts": self.MOUNTS[:1]})
+        with mock.patch.object(mod.docker, "from_env", return_value=d, create=True):
+            r = mod.app.test_client().get("/api/backup/homarr/mounts")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([m["destination"] for m in r.get_json()["mounts"]], ["/appdata/db"])
+
+    def test_endpoint_reports_failure_so_the_ui_can_warn_anyway(self):
+        """The dialog falls back to a generic warning on any error — it must
+        get an error, not an empty list that reads as 'nothing to worry about'."""
+        mod = self.mod
+        with mock.patch.object(mod.docker, "from_env", side_effect=RuntimeError("socket gone"), create=True):
+            r = mod.app.test_client().get("/api/backup/homarr/mounts")
+        self.assertEqual(r.status_code, 500)
+        self.assertNotIn("mounts", r.get_json())
+
+
 class StaleContainerDetectionTests(SafetyTestBase):
     """A container keeps running its original image after the tag moves on.
     The digest we compare must come from that image, not from the tag (#23)."""

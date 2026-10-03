@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.13] — 2026-10-03
+
+### Added
+- **The Rollback dialog now says what a rollback won't revert** — rollback swaps the container back to the previous image and configuration, but data in its volumes and bind mounts stays exactly as the newer version left it. For an app that migrates its database on first start, that can leave the previous version unable to start at all — which is what happened rolling Homarr back from v2 to v1: the container came back, then crash-looped on a database v2 had already converted. The dialog now lists the container's writable mounts and warns that they won't be restored. Read-only mounts, tmpfs and the Docker socket are left out, since none of them can carry a migration. If the mounts can't be read, it warns anyway rather than let the rollback look complete
+
+### Documentation
+- New **Rollback restores the container, not its data** section under Backup & rollback, plus a Caveat: back up the data of apps that migrate before updating them, and restore it if a rolled-back app won't start. docker-updater doesn't snapshot data itself — copying a live database while the app runs can produce a corrupt copy
+
 ## [1.15.12] — 2026-09-25
 
 ### Fixed

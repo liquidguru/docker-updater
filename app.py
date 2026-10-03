@@ -70,7 +70,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.12"
+APP_VERSION          = "1.15.13"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -2882,6 +2882,57 @@ def api_backup_delete(name):
         hs.setdefault("rollbacks", {}).pop(name, None)
         save_host_state(host_id, hs)
     return jsonify({"ok": True})
+
+
+def _writable_data_mounts(attrs: dict) -> list[dict]:
+    """The mounts a rollback will NOT revert: writable bind mounts and volumes.
+
+    Rollback swaps the container back to the previous image and config, but
+    anything the newer version wrote into a mount stays as it is. Apps that
+    migrate their database on first start (Homarr, Sonarr/Radarr, Immich,
+    Nextcloud, ...) can then leave the old version unable to read its own
+    data. Read-only mounts can't have been changed, tmpfs isn't persisted, and
+    a socket isn't data, so none of those are worth warning about.
+    """
+    out = []
+    for m in attrs.get("Mounts") or []:
+        kind = m.get("Type")
+        if kind not in ("bind", "volume") or not m.get("RW", True):
+            continue
+        src = (m.get("Name") if kind == "volume" else None) or m.get("Source") or ""
+        dst = m.get("Destination") or ""
+        if src.endswith(".sock") or dst.endswith(".sock"):
+            continue
+        out.append({"type": kind, "source": src, "destination": dst})
+    return out
+
+
+@app.route("/api/backup/<name>/mounts", methods=["GET"])
+def api_backup_mounts(name):
+    """Writable data mounts of the backup a rollback would restore, so the
+    Rollback dialog can say what it won't revert. Called when Rollback is
+    clicked rather than on every status poll — for a remote host that means
+    one connection on demand, not one per poll."""
+    host_id = request.args.get("host", "local")
+    try:
+        if host_id == "local":
+            client = docker.from_env()
+        else:
+            host = next((h for h in load_hosts() if h["id"] == host_id), None)
+            if not host:
+                return jsonify({"error": f"Host '{host_id}' not found."}), 404
+            client = get_docker_client(host.get("url"))
+        # The backup is what will run after a rollback; it was recreated with
+        # the same mounts, but read it rather than assume.
+        try:
+            c = client.containers.get(f"{name}_old")
+        except docker.errors.NotFound:
+            c = client.containers.get(name)
+        return jsonify({"mounts": _writable_data_mounts(c.attrs)})
+    except docker.errors.NotFound:
+        return jsonify({"error": f"No container '{name}' or '{name}_old'."}), 404
+    except Exception as e:
+        return jsonify({"error": f"Could not read mounts: {e}"}), 500
 
 
 @app.route("/api/settings", methods=["GET"])
