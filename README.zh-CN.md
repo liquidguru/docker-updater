@@ -10,7 +10,9 @@
 
 ---
 
-![更新页 — 正在更新的容器，卡片上显示实时下载进度](screenshot-updates.jpeg)
+![更新页 — 待更新容器、批量选择和最近更新历史](screenshot-updates.jpeg)
+
+![正在更新的容器 — 卡片上显示实时下载进度](screenshot-updating.jpeg)
 
 ![备份页 — 保留的回滚点，可一键回滚或删除](screenshot-backups.jpeg)
 

@@ -8,7 +8,9 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 ---
 
-![Updates tab — a container mid-update, with live download progress on its card](screenshot-updates.jpeg)
+![Updates tab — pending updates with bulk select and recent-update history](screenshot-updates.jpeg)
+
+![A container mid-update — live download progress on its card](screenshot-updating.jpeg)
 
 ![Backups tab — kept rollback points with one-click rollback or delete](screenshot-backups.jpeg)
 
