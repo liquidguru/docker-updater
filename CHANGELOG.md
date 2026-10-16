@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.17] — 2026-10-17
+
+### Added
+- **Live download status on the update card** — while a container updates, its card now says what it's doing instead of just spinning: `Downloading 62% · 247MB of 380MB` (with a `~` on the total while it's still an estimate), then `Unpacking the image — this can take a few minutes for large ones`, then `Replacing the container…` once the download ends and the old container is being swapped out. Until now the card gave no sign of progress, so an image that spent minutes unpacking — Open WebUI, with five updates sharing the disk — looked hung. It reads the progress API added in 1.15.14–1.15.16 (`/api/pulls`), polled once a second only while something is updating, and updates the card in place rather than redrawing the list. The bar is a real percentage while the size is known and an animated stripe while unpacking (static if you've asked your system for reduced motion). English and Chinese
+
 ## [1.15.16] — 2026-10-17
 
 ### Added

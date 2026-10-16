@@ -113,6 +113,14 @@
   .card-name { font-weight:600; font-size:14px; margin-bottom:2px; }
   .card-image { font-family:'Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .card-meta { font-size:11px; color:var(--muted); margin-top:3px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  /* Live pull status on a card that is updating: what it's doing and how far along */
+  .pull-progress { margin-top:7px; max-width:380px; }
+  .pull-text { font-size:12px; color:var(--text); }
+  .pull-bar { height:4px; border-radius:2px; background:var(--surface2); overflow:hidden; margin-top:5px; }
+  .pull-bar > span { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s ease; }
+  .pull-bar.indeterminate > span { width:35%; animation:pull-slide 1.5s ease-in-out infinite; }
+  @keyframes pull-slide { 0% { margin-left:-35%; } 100% { margin-left:100%; } }
+  @media (prefers-reduced-motion: reduce) { .pull-bar.indeterminate > span { animation:none; width:100%; opacity:.45; } }
   .card-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 
   .host-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--muted); white-space:nowrap; }
@@ -409,6 +417,9 @@
   let currentTab = 'update';
   let selectedNames = new Set();
   let cancellingKeys = new Set();   // container keys with a cancel request in flight
+  let activePulls = {};             // `host:container` -> latest entry from /api/pulls
+  let pullSeen = new Set();         // keys that have shown a pull during this update
+  let pullTimer = null;             // fast poll, running only while something updates
   let logPollTimer = null;
   let logTarget = null;    // {name, hostId}
   let refreshTimer = null;
@@ -742,6 +753,88 @@
     return i === 0 ? `${n.toFixed(0)}${units[i]}` : `${n.toFixed(2)}${units[i]}`;
   }
 
+  // <pull-status>
+  // What an updating card says about its image pull, from GET /api/pulls. Plain
+  // functions of the page state so tests/test_ui_pulls.py can run them in node.
+  function pullStatus(key) {
+    const p = activePulls[key];
+    // The entry vanishes when the pull ends, but the update carries on swapping
+    // the container — say so, rather than going quiet. Only once we've seen it.
+    if (!p) return pullSeen.has(key) ? {text: t('pull.applying'), pct: null} : null;
+    const phase = p.phase || 'downloading';
+    if (phase === 'extracting') return {text: t('pull.extracting'), pct: null};
+    if (phase === 'finishing')  return {text: t('pull.finishing'),  pct: null};
+    if (phase === 'starting')   return {text: t('pull.starting'),   pct: p.percent_complete ?? null};
+    const done = _human_size_js(p.progress_bytes);
+    if (p.percent_complete == null) return {text: t('pull.downloading_unknown', {done}), pct: null};
+    return {
+      text: t(p.total_estimated ? 'pull.downloading_est' : 'pull.downloading',
+              {pct: Math.floor(p.percent_complete), done, total: _human_size_js(p.total_bytes)}),
+      pct: p.percent_complete,
+    };
+  }
+
+  function pullBarHtml(s) {
+    return s.pct == null
+      ? '<div class="pull-bar indeterminate"><span></span></div>'
+      : `<div class="pull-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(s.pct)}"><span style="width:${s.pct}%"></span></div>`;
+  }
+
+  function pullProgressHtml(key) {
+    const s = pullStatus(key);
+    if (!s) return '';
+    return `<div class="pull-progress" data-pull="${esc(key)}"><div class="pull-text">${esc(s.text)}</div>${pullBarHtml(s)}</div>`;
+  }
+  // </pull-status>
+
+  // Update the status line on cards already in the page, in place — rebuilding
+  // the card list every second would eat hover/focus and restart the animation.
+  function syncPullProgress() {
+    document.querySelectorAll('.container-card.updating[data-key]').forEach(card => {
+      const key = card.dataset.key;
+      const s = pullStatus(key);
+      const el = card.querySelector('.pull-progress');
+      if (!s) { if (el) el.remove(); return; }
+      if (!el) { card.querySelector('.card-info').insertAdjacentHTML('beforeend', pullProgressHtml(key)); return; }
+      el.querySelector('.pull-text').textContent = s.text;
+      const bar = el.querySelector('.pull-bar');
+      const determinate = s.pct != null;
+      if (bar.classList.contains('indeterminate') === determinate) {
+        bar.outerHTML = pullBarHtml(s);                 // switching kind: rebuild once
+      } else if (determinate) {
+        bar.firstElementChild.style.width = s.pct + '%';
+        bar.setAttribute('aria-valuenow', Math.round(s.pct));
+      }
+    });
+  }
+
+  async function fetchPulls() {
+    try {
+      const r = await fetch('/api/pulls', {cache: 'no-store'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const next = {};
+      (d.pulls || []).forEach(p => { next[`${p.host_id}:${p.container}`] = p; });
+      Object.keys(next).forEach(k => pullSeen.add(k));
+      activePulls = next;
+      syncPullProgress();
+    } catch (e) { /* the next tick retries */ }
+  }
+
+  // Poll fast only while something is updating; the normal 2s/15s status poll
+  // is too slow to show a download that can finish in a few seconds.
+  function managePullPolling(anyUpdating) {
+    if (anyUpdating && !pullTimer) {
+      fetchPulls();
+      pullTimer = setInterval(fetchPulls, 1000);
+    } else if (!anyUpdating && pullTimer) {
+      clearInterval(pullTimer);
+      pullTimer = null;
+      activePulls = {};
+      pullSeen.clear();
+    }
+  }
+
   async function deleteSelectedImages() {
     const ids = [...document.querySelectorAll('.prune-check:checked')].map(cb => cb.value);
     if (!ids.length) return;
@@ -901,6 +994,8 @@
         allContainers.filter(c => c.updating).map(c => `${c.host_id}:${c.name}`)
       );
       cancellingKeys.forEach(k => { if (!stillUpdating.has(k)) cancellingKeys.delete(k); });
+      pullSeen.forEach(k => { if (!stillUpdating.has(k)) pullSeen.delete(k); });
+      managePullPolling(stillUpdating.size > 0);
 
       renderAll(data);
       const banner = document.getElementById('checking-banner');
@@ -1068,12 +1163,13 @@
 
     const logsBtn = `<button class="btn-ghost btn-sm" onclick="openCtrLogs('${esc(c.name)}','${esc(c.host_id)}')">${t('btn.logs')}</button>`;
 
-    return `<div class="container-card ${statusClass} ${showCb ? 'has-cb' : ''} ${isSelected ? 'selected' : ''}" id="card-${esc(selKey)}">
+    return `<div class="container-card ${statusClass} ${showCb ? 'has-cb' : ''} ${isSelected ? 'selected' : ''}" id="card-${esc(selKey)}" data-key="${esc(selKey)}">
       ${cbHtml}
       <div class="card-info">
         <div class="card-name">${esc(c.name)}</div>
         <div class="card-image" title="${esc(c.image)}">${esc(c.image)}</div>
         <div class="card-meta">${checkedAt}${sizeChip ? `<span class="sep">·</span>${sizeChip}` : ''}${hostChip ? `<span class="sep">·</span>${hostChip}` : ''}${composeChip ? `<span class="sep">·</span>${composeChip}` : ''}${whatsNew ? `<span class="sep">·</span>${whatsNew}` : ''}</div>
+        ${isUpdating ? pullProgressHtml(selKey) : ''}
       </div>
       <div class="card-actions">${badge}${actions}${logsBtn}</div>
     </div>`;
