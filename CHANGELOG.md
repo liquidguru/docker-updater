@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.15] — 2026-10-17
+
+### Fixed
+- **A pull that downloads nothing no longer shows a stale estimate** — v1.15.14 starts a pull's progress from the update check's saved download size. When several containers share an image (four here use `nginx:alpine`), the first one to update leaves its layers on the host, so the others' saved estimate is out of date: they showed `0.0MB / 25.0MB, 0%` for a couple of seconds, then vanished, for a pull that downloaded nothing. Docker sends no per-layer events for an already-current image, so nothing ever replaced the estimate. Now, if the registry digest the check saw is already among the local image's `RepoDigests`, the pull is a no-op and no estimate is given (the entry stays `null`, which is the truth: unknown). If that lookup fails, the estimate is kept rather than guessed away. Found the same afternoon by updating `homarr-weather` and then `gmail-triage` while watching `/api/pulls`
+
 ## [1.15.14] — 2026-10-17
 
 ### Added

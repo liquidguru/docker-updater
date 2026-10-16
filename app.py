@@ -71,7 +71,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.14"
+APP_VERSION          = "1.15.15"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1713,18 +1713,38 @@ def _exposed_ports(cfg: dict) -> list:
     return out
 
 
-def _expected_download_bytes(container_name: str, host_id: str) -> int | None:
+def _expected_download_bytes(container_name: str, host_id: str,
+                             client=None, image_name: str | None = None) -> int | None:
     """The checker's compressed-download estimate for this container, if it has
     one. Read from state (a file read, not a registry call), so it costs nothing
-    at pull time. None when the check hasn't sized the pull, or it's zero."""
+    at pull time. None when the check hasn't sized the pull, or it's zero.
+
+    The estimate goes stale when another container pulls the same tag first:
+    four containers share `nginx:alpine`, so after one updated the other three
+    still carried a 25MB estimate for a pull that would download nothing — and
+    because Docker sends no per-layer events for an already-current image,
+    nothing replaced it, so the entry sat at `0 / 25MB, 0%` until it vanished.
+    When the digest the check saw is already among the local image's
+    RepoDigests, the pull is a no-op and there is no estimate to give."""
     try:
         if host_id == "local":
             with _state_lock:
                 entry = load_state().get("available", {}).get(container_name)
         else:
             entry = load_host_state(host_id).get("available", {}).get(container_name)
-        size = (entry or {}).get("download_size")
-        return size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else None
+        entry = entry or {}
+        size = entry.get("download_size")
+        if not (isinstance(size, int) and not isinstance(size, bool) and size > 0):
+            return None
+        remote_digest = entry.get("remote_digest")
+        if client is not None and image_name and remote_digest:
+            try:
+                local = client.images.get(image_name).attrs.get("RepoDigests") or []
+                if any(str(d).endswith("@" + remote_digest) for d in local):
+                    return None
+            except Exception:
+                pass  # can't tell — keep the estimate rather than guess
+        return size
     except Exception:
         return None
 
@@ -1873,7 +1893,8 @@ def apply_update(container_name: str, host_id: str = "local",
         _pull_error = None
         _pull_cancelled = False
         with closing(_pull_image(client, image_name, container_name, host_id,
-                                 _expected_download_bytes(container_name, host_id))) as pull:
+                                 _expected_download_bytes(container_name, host_id,
+                                                          client, image_name))) as pull:
             for chunk in pull:
                 with _logs_lock:
                     _pull_cancelled = key in _update_cancel

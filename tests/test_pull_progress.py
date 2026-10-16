@@ -358,6 +358,62 @@ class PullEstimateTests(SafetyTestBase):
         self._run(self.mod.apply_update, d, "web", "local", reserved=True)
         self.assertEqual((seen[0]["total_bytes"], seen[0]["total_estimated"]), (self.EST, True))
 
+    # ── stale estimates: another container already pulled this tag ───────────
+
+    def _images_with(self, repo_digests):
+        client = mock.Mock()
+        client.images.get.return_value = mock.Mock(attrs={"RepoDigests": repo_digests})
+        return client
+
+    def _expected(self, client, entry=None):
+        entry = {"download_size": self.EST, "remote_digest": "sha256:new"} if entry is None else entry
+        with mock.patch.object(self.mod, "load_state",
+                               return_value={"available": {"web": entry}}):
+            return self.mod._expected_download_bytes("web", "local", client, "img:latest")
+
+    def test_estimate_is_dropped_when_the_target_digest_is_already_local(self):
+        """nginx:alpine is shared by four containers; after the first updated, the
+        others still said 25MB for a pull that downloads nothing. Docker sends no
+        layer events for an already-current image, so nothing replaced it."""
+        self.assertIsNone(self._expected(self._images_with(["img@sha256:new"])))
+
+    def test_estimate_is_kept_when_the_digest_is_not_local(self):
+        self.assertEqual(self._expected(self._images_with(["img@sha256:old"])), self.EST)
+
+    def test_digest_match_is_anchored_to_the_at_sign(self):
+        """The match is `repo@<digest>`. This string ends with the stored digest
+        but isn't preceded by '@', so an unanchored endswith would wrongly
+        treat it as present (and drop a legitimate estimate)."""
+        entry = {"download_size": self.EST, "remote_digest": "sha256:abc"}
+        self.assertEqual(self._expected(self._images_with(["img@xsha256:abc"]), entry), self.EST)
+
+    def test_estimate_is_kept_when_the_local_lookup_fails(self):
+        """Can't tell either way — keep the estimate rather than guess."""
+        client = mock.Mock()
+        client.images.get.side_effect = RuntimeError("daemon hiccup")
+        self.assertEqual(self._expected(client), self.EST)
+
+    def test_estimate_is_kept_when_no_digest_was_stored(self):
+        self.assertEqual(self._expected(self._images_with(["img@sha256:new"]),
+                                        {"download_size": self.EST}), self.EST)
+
+    def test_apply_update_shows_no_estimate_for_a_pull_that_will_download_nothing(self):
+        d = FakeDocker(self.mod)
+        d.new("web")
+        d.images.get = lambda _ref: mock.Mock(attrs={"RepoDigests": ["img@sha256:new"]})
+        self.state["available"]["web"] = {"download_size": self.EST, "remote_digest": "sha256:new"}
+        seen = []
+
+        def chunks():
+            yield {"status": "Pulling from library/img"}      # no layer id, as Docker sends
+            seen.append(self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0])
+            yield {"error": "stop here"}
+
+        d.api.pull.return_value = chunks()
+        self._run(self.mod.apply_update, d, "web", "local", reserved=True)
+        self.assertEqual((seen[0]["total_bytes"], seen[0]["percent_complete"], seen[0]["total_estimated"]),
+                         (None, None, False))
+
 
 if __name__ == "__main__":
     unittest.main()
