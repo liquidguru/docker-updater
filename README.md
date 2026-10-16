@@ -392,6 +392,33 @@ Container state (update availability, defer decisions, history, backups) is pers
 
 ---
 
+## Image pull progress API
+
+`GET /api/pulls` returns all image pulls currently initiated by this app, including remote-host updates and self-updates. It uses the same session authentication as the other API endpoints (log in first if authentication is enabled). Poll the endpoint while an update runs:
+
+```json
+{
+  "pulls": [
+    {
+      "id": "web",
+      "image": "nginx:latest",
+      "container": "web",
+      "host_id": "local",
+      "started_at": "2026-10-16T17:00:00Z",
+      "progress_bytes": 5242880,
+      "total_bytes": 10485760,
+      "percent_complete": 50.0
+    }
+  ]
+}
+```
+
+`progress_bytes` sums Docker's latest downloaded-byte count for each layer, without counting repeated events or extraction bytes twice. Cached layers require zero download bytes. `total_bytes` and `percent_complete` are `null` until Docker reports sizes for all discovered non-cached layers. Totals are based on Docker's stream, not a pre-fetched manifest; they can change as more layers are discovered. A fully cached pull may report zero total bytes and 100%, or remain unknown if Docker emits no layer details. 100% means the reported download bytes are complete, not that extraction or container recreation has finished.
+
+Pulls appear before the Docker request starts and disappear when the stream finishes, fails, or is cancelled, before container recreation. No active pulls returns `{"pulls": []}`. IDs are container names on the local host and `host_id:container` on remote hosts; separate updates of the same image remain separate entries. Tracking is in memory for this app process, is cleared on restart, and does not include pulls initiated by other tools or direct Docker commands.
+
+---
+
 ## Backup & rollback
 
 docker-updater keeps a safety net around every update — at two levels.

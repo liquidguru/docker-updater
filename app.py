@@ -6,6 +6,7 @@ Supports multiple Docker hosts via SSH or TCP.
 
 import base64
 import datetime
+from contextlib import closing
 from datetime import timedelta
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="paramiko")
@@ -120,6 +121,8 @@ _check_running = False
 _update_logs: dict[str, list[str]] = {}
 _update_running: set[str] = set()
 _update_cancel: set[str] = set()    # keys whose in-flight pull the user asked to cancel
+_pulls_lock = threading.Lock()
+_active_pulls: dict[str, dict] = {}
 _OWN_CONTAINER_ID: str | None = None  # set at startup via _detect_own_container()
 _OWN_HOSTNAME: str | None = None      # gethostname(), fallback self-update match
 
@@ -1710,6 +1713,75 @@ def _exposed_ports(cfg: dict) -> list:
     return out
 
 
+def _record_pull_progress(pull: dict, layers: dict, chunk: dict) -> None:
+    """Aggregate download bytes, not extraction bytes or repeated layer events."""
+    layer_id = chunk.get("id")
+    status = chunk.get("status", "")
+    if not layer_id or status not in (
+        "Pulling fs layer", "Waiting", "Downloading", "Verifying Checksum",
+        "Download complete", "Extracting", "Pull complete", "Already exists",
+    ):
+        return
+    layer = layers.setdefault(layer_id, {"current": 0, "total": None})
+    if status == "Already exists":
+        layer.update(current=0, total=0)
+    elif status == "Downloading":
+        detail = chunk.get("progressDetail") or {}
+        total = detail.get("total")
+        current = detail.get("current")
+        if isinstance(total, int) and total >= 0:
+            layer["total"] = total
+        if isinstance(current, int) and current >= 0:
+            layer["current"] = current
+        if layer["total"] is not None:
+            layer["current"] = min(layer["current"], layer["total"])
+    elif status in ("Verifying Checksum", "Download complete", "Extracting", "Pull complete"):
+        if layer["total"] is not None:
+            layer["current"] = layer["total"]
+
+    progress_bytes = sum(layer["current"] for layer in layers.values())
+    total_bytes = (
+        sum(layer["total"] for layer in layers.values())
+        if all(layer["total"] is not None for layer in layers.values()) else None
+    )
+    pull.update(
+        progress_bytes=progress_bytes,
+        total_bytes=total_bytes,
+        percent_complete=(
+            None if total_bytes is None else
+            round(100 * progress_bytes / total_bytes, 2) if total_bytes else 100.0
+        ),
+    )
+
+
+def _pull_image(client, image_name: str, container_name: str, host_id: str):
+    """Track a streamed pull until it finishes, fails, or is closed by cancellation."""
+    key = _container_key(container_name, host_id)
+    pull = {
+        "id": key, "image": image_name, "container": container_name,
+        "host_id": host_id,
+        "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "progress_bytes": 0, "total_bytes": None, "percent_complete": None,
+    }
+    layers: dict[str, dict] = {}
+    stream = None
+    with _pulls_lock:
+        _active_pulls[key] = pull
+    try:
+        stream = client.api.pull(image_name, stream=True, decode=True)
+        for chunk in stream:
+            with _pulls_lock:
+                _record_pull_progress(pull, layers, chunk)
+            yield chunk
+    finally:
+        with _pulls_lock:
+            _active_pulls.pop(key, None)
+        if stream is not None:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
+
+
 def apply_update(container_name: str, host_id: str = "local",
                  reserved: bool = False) -> None:
     # `reserved=True` means the caller already claimed this container via
@@ -1764,19 +1836,20 @@ def apply_update(container_name: str, host_id: str = "local",
         # interrupting would risk leaving the container half-swapped.
         _pull_error = None
         _pull_cancelled = False
-        for chunk in client.api.pull(image_name, stream=True, decode=True):
-            with _logs_lock:
-                _pull_cancelled = key in _update_cancel
-            if _pull_cancelled:
-                break
-            status = chunk.get("status", "")
-            detail = chunk.get("progress", "") or chunk.get("error", "")
-            if status in ("Pulling from", "Status: Image is up to date for",
-                          "Status: Downloaded newer image for") or "Pull complete" in status:
-                emit(f"  {status} {detail}".rstrip())
-            if "error" in chunk:
-                _pull_error = chunk.get("error") or str(chunk.get("errorDetail") or "unknown")
-                emit(f"  ERROR: {_pull_error}")
+        with closing(_pull_image(client, image_name, container_name, host_id)) as pull:
+            for chunk in pull:
+                with _logs_lock:
+                    _pull_cancelled = key in _update_cancel
+                if _pull_cancelled:
+                    break
+                status = chunk.get("status", "")
+                detail = chunk.get("progress", "") or chunk.get("error", "")
+                if status in ("Pulling from", "Status: Image is up to date for",
+                              "Status: Downloaded newer image for") or "Pull complete" in status:
+                    emit(f"  {status} {detail}".rstrip())
+                if "error" in chunk:
+                    _pull_error = chunk.get("error") or str(chunk.get("errorDetail") or "unknown")
+                    emit(f"  ERROR: {_pull_error}")
         if _pull_cancelled:
             emit("\nCANCELLED: Pull cancelled — no change to the container.")
             emit(f"  '{container_name}' has NOT been touched and is still running.")
@@ -2622,6 +2695,15 @@ def index():
         auth_enabled=AUTH_ENABLED,
         i18n_messages=_load_i18n_messages(),
     )
+
+
+@app.route("/api/pulls")
+def api_pulls():
+    with _pulls_lock:
+        pulls = [dict(pull) for pull in _active_pulls.values()]
+    response = jsonify({"pulls": pulls})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/status")
