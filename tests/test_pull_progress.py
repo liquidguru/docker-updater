@@ -415,5 +415,130 @@ class PullEstimateTests(SafetyTestBase):
                          (None, None, False))
 
 
+class PullPhaseTests(unittest.TestCase):
+    """The byte counts stop at 100% when the download ends, but unpacking a big
+    image can take far longer, and the entry lives until it's done — so a bare
+    "100%" for minutes reads as stuck. `phase` says what is actually happening."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_app_module()
+
+    def setUp(self):
+        self.mod.AUTH_ENABLED = False
+        self.mod.app.config.update(TESTING=True, SECRET_KEY="test-secret-key")
+        self.mod._active_pulls.clear()
+
+    def phases(self, chunks):
+        """The phase reported after each chunk, the way a poller would see it."""
+        client = mock.Mock()
+        client.api.pull.return_value = iter(chunks)
+        out = []
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local")) as stream:
+            for _ in chunks:
+                next(stream)
+                out.append(self.mod._active_pulls["web"]["phase"])
+        return out
+
+    @staticmethod
+    def ev(layer, status, **detail):
+        chunk = {"id": layer, "status": status}
+        if detail:
+            chunk["progressDetail"] = detail
+        return chunk
+
+    def test_phase_follows_a_two_layer_pull_from_start_to_finish(self):
+        ev = self.ev
+        timeline = self.phases([
+            ev("a", "Pulling fs layer"),                 # queued
+            ev("b", "Pulling fs layer"),
+            ev("a", "Downloading", current=10, total=100),
+            ev("a", "Download complete"),                # b is still queued
+            ev("b", "Downloading", current=50, total=200),
+            ev("b", "Download complete"),                # nothing left to download
+            ev("a", "Extracting"),
+            ev("a", "Pull complete"),                    # b still unpacking
+            ev("b", "Extracting"),
+            ev("b", "Pull complete"),                    # every layer done
+            {"status": "Status: Downloaded newer image for img:latest"},
+        ])
+        self.assertEqual(timeline, [
+            "downloading", "downloading", "downloading", "downloading", "downloading",
+            "extracting", "extracting", "extracting", "extracting",
+            # every layer is done, but only Docker's closing line says the pull
+            # is over — until then the phase holds rather than guessing
+            "extracting",
+            "finishing",
+        ])
+
+    def test_a_pull_with_no_layer_events_yet_is_starting(self):
+        seen = []
+
+        def silent_then_one_line():
+            # the entry is registered by now, but Docker hasn't said anything
+            seen.append(self.mod._active_pulls["web"]["phase"])
+            yield {"status": "Pulling from library/img"}      # no layer id
+
+        client = mock.Mock()
+        client.api.pull.return_value = silent_then_one_line()
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local")) as stream:
+            next(stream)
+            seen.append(self.mod._active_pulls["web"]["phase"])
+        self.assertEqual(seen, ["starting", "starting"])
+
+    def test_one_layer_unpacking_does_not_end_the_download_phase(self):
+        """Docker unpacks early layers while later ones still download."""
+        ev = self.ev
+        timeline = self.phases([
+            ev("a", "Download complete"), ev("a", "Extracting"),
+            ev("b", "Downloading", current=1, total=9),
+        ])
+        self.assertEqual(timeline[-1], "downloading")
+
+    def test_an_already_current_image_goes_straight_to_finishing(self):
+        """No per-layer events at all, just Docker's closing line."""
+        self.assertEqual(self.phases([{"status": "Status: Image is up to date for img:latest"}]),
+                         ["finishing"])
+
+    def test_a_fully_cached_pull_finishes_only_on_the_closing_line(self):
+        ev = self.ev
+        self.assertEqual(
+            self.phases([ev("a", "Already exists"), ev("b", "Already exists"),
+                         {"status": "Status: Image is up to date for img:latest"}]),
+            ["starting", "starting", "finishing"])
+
+    def test_a_run_of_cached_layers_does_not_claim_finishing_before_the_rest_arrive(self):
+        """Found by pulling a real, partly cached image on a loaded NAS: the first
+        layers came as 'Already exists', so every layer seen so far was done and
+        the phase read `finishing` — then went back to `downloading` nine seconds
+        later when Docker announced the next layer. Unit tests built from a tidy
+        event sequence never produced that gap."""
+        ev = self.ev
+        timeline = self.phases([
+            ev("a", "Already exists"), ev("b", "Already exists"),
+            ev("c", "Pulling fs layer"),                    # announced late
+        ])
+        self.assertNotIn("finishing", timeline)
+        self.assertEqual(timeline, ["starting", "starting", "downloading"])
+
+    def test_a_layers_stage_never_moves_backwards(self):
+        """A stray late 'Waiting' must not drag an extracting layer back to queued."""
+        ev = self.ev
+        timeline = self.phases([
+            ev("a", "Download complete"), ev("a", "Extracting"), ev("a", "Waiting"),
+        ])
+        self.assertEqual(timeline[-1], "extracting")
+
+    def test_phase_is_exposed_through_the_api(self):
+        ev = self.ev
+        client = mock.Mock()
+        client.api.pull.return_value = iter([ev("a", "Download complete"), ev("a", "Extracting")])
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local")) as stream:
+            next(stream)
+            next(stream)
+            pull = self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0]
+        self.assertEqual(pull["phase"], "extracting")
+
+
 if __name__ == "__main__":
     unittest.main()

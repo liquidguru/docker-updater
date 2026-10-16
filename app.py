@@ -71,7 +71,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.15"
+APP_VERSION          = "1.15.16"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1749,6 +1749,45 @@ def _expected_download_bytes(container_name: str, host_id: str,
         return None
 
 
+# Docker's per-layer events, mapped to the stage each puts a layer in. Order
+# matters: a layer's stage only ever moves forward.
+_LAYER_STAGE = {
+    "Pulling fs layer": "queued", "Waiting": "queued",
+    "Downloading": "downloading",
+    "Verifying Checksum": "downloaded", "Download complete": "downloaded",
+    "Extracting": "extracting",
+    "Pull complete": "done", "Already exists": "done",
+}
+_STAGE_ORDER = ("queued", "downloading", "downloaded", "extracting", "done")
+
+
+def _pull_phase(layers: dict, current: str = "starting") -> str:
+    """Where a whole pull is, from its layers: still `downloading` while any
+    layer is queued or in flight; `extracting` once nothing is left to download
+    but layers are still being unpacked.
+
+    The byte counts stop at 100% when the download ends, but unpacking a large
+    image can take far longer than downloading it (53s after a 13s download on
+    this NAS; minutes for Open WebUI), and the entry lives until it's finished.
+    Without a phase that reads as stuck.
+
+    `finishing` is never inferred here — only Docker's closing "Status:" line
+    sets it. When every layer seen so far is done we can't tell whether the pull
+    is ending or more layers are about to be announced: a partly cached image
+    opens with a run of "Already exists", and on a loaded host the rest can be
+    seconds behind. The first version called that `finishing` and then went back
+    to `downloading` nine seconds later, found only by pulling a real image. So
+    with nothing to go on, the phase holds."""
+    stages = [layer["stage"] for layer in layers.values()]
+    if not stages:
+        return "starting"
+    if any(s in ("queued", "downloading") for s in stages):
+        return "downloading"
+    if any(s in ("downloaded", "extracting") for s in stages):
+        return "extracting"
+    return current
+
+
 def _record_pull_progress(pull: dict, layers: dict, chunk: dict,
                           expected_bytes: int | None = None) -> None:
     """Aggregate download bytes, not extraction bytes or repeated layer events.
@@ -1761,12 +1800,16 @@ def _record_pull_progress(pull: dict, layers: dict, chunk: dict,
     percentage at 99 so an estimate never claims the download is finished."""
     layer_id = chunk.get("id")
     status = chunk.get("status", "")
-    if not layer_id or status not in (
-        "Pulling fs layer", "Waiting", "Downloading", "Verifying Checksum",
-        "Download complete", "Extracting", "Pull complete", "Already exists",
-    ):
+    if not layer_id and status.startswith("Status:"):
+        # Docker's closing line ("Image is up to date" / "Downloaded newer
+        # image"): every layer is done, only the end of the stream is left.
+        pull["phase"] = "finishing"
         return
-    layer = layers.setdefault(layer_id, {"current": 0, "total": None})
+    if not layer_id or status not in _LAYER_STAGE:
+        return
+    layer = layers.setdefault(layer_id, {"current": 0, "total": None, "stage": "queued"})
+    if _STAGE_ORDER.index(_LAYER_STAGE[status]) >= _STAGE_ORDER.index(layer["stage"]):
+        layer["stage"] = _LAYER_STAGE[status]
     if status == "Already exists":
         layer.update(current=0, total=0)
     elif status == "Downloading":
@@ -1803,6 +1846,7 @@ def _record_pull_progress(pull: dict, layers: dict, chunk: dict,
         total_bytes=total_bytes,
         percent_complete=percent,
         total_estimated=estimated,
+        phase=_pull_phase(layers, pull.get("phase", "starting")),
     )
 
 
@@ -1815,7 +1859,7 @@ def _pull_image(client, image_name: str, container_name: str, host_id: str,
         "host_id": host_id,
         "started_at": datetime.datetime.utcnow().isoformat() + "Z",
         "progress_bytes": 0, "total_bytes": None, "percent_complete": None,
-        "total_estimated": False,
+        "total_estimated": False, "phase": "starting",
     }
     if expected_bytes:
         pull.update(total_bytes=expected_bytes, percent_complete=0.0, total_estimated=True)

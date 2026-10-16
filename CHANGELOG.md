@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.16] — 2026-10-17
+
+### Added
+- **`phase` on each pull in `GET /api/pulls`** — `starting`, `downloading`, `extracting` or `finishing`. The byte counts stop at 100% when the download ends, but unpacking a large image can take far longer than downloading it (53s after a 13s download on the NAS; minutes for Open WebUI with five pulls sharing the disk), and an entry lives until the pull stream ends. So a progress display showed "100%" for minutes and looked stuck. `extracting` means nothing is left to download but layers are still being unpacked; `downloading` stays in force while any layer is queued or in flight, since Docker unpacks early layers while later ones are still arriving; `finishing` means every layer is done, or the image was already current. Worked out from Docker's own per-layer events; the existing fields are unchanged, and nothing in the dashboard uses it yet
+
 ## [1.15.15] — 2026-10-17
 
 ### Fixed
