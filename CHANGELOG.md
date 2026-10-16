@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.14] — 2026-10-17
+
+### Added
+- **Image pull progress API** — `GET /api/pulls` lists the image downloads currently running (container, image, host, downloaded bytes, total, percent), including remote-host updates and self-updates. It uses the same session authentication as the rest of the API, and an entry disappears when its pull finishes, fails or is cancelled. Nothing in the dashboard shows it yet — it's there for scripts and for a progress bar later. Contributed by @mayberryjp (#29)
+
+### Changed
+- **Download progress now has a percentage from the first second.** Docker downloads a few layers at a time, and a layer only reports its size once it starts, so the stream alone can't give a total until the last layer begins — on a real 8-layer, 398MB pull that was the first 57% of the transfer, during which `total_bytes` and `percent_complete` were `null` before jumping straight to 62%. The update check has already worked out the compressed download size from the registry, so that figure is now used as the total until Docker's own is complete. A new `total_estimated` field says which kind of number you're looking at, and while it's `true` the percentage never exceeds 99, so an estimate can't claim the download is finished. On the tested pull the estimate matched the stream's final total to the byte (398,351,173). With no estimate — the container hasn't been checked yet — behaviour is unchanged
+
 ## [1.15.13] — 2026-10-03
 
 ### Added

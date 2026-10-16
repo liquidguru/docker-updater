@@ -71,7 +71,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.13"
+APP_VERSION          = "1.15.14"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1713,8 +1713,32 @@ def _exposed_ports(cfg: dict) -> list:
     return out
 
 
-def _record_pull_progress(pull: dict, layers: dict, chunk: dict) -> None:
-    """Aggregate download bytes, not extraction bytes or repeated layer events."""
+def _expected_download_bytes(container_name: str, host_id: str) -> int | None:
+    """The checker's compressed-download estimate for this container, if it has
+    one. Read from state (a file read, not a registry call), so it costs nothing
+    at pull time. None when the check hasn't sized the pull, or it's zero."""
+    try:
+        if host_id == "local":
+            with _state_lock:
+                entry = load_state().get("available", {}).get(container_name)
+        else:
+            entry = load_host_state(host_id).get("available", {}).get(container_name)
+        size = (entry or {}).get("download_size")
+        return size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else None
+    except Exception:
+        return None
+
+
+def _record_pull_progress(pull: dict, layers: dict, chunk: dict,
+                          expected_bytes: int | None = None) -> None:
+    """Aggregate download bytes, not extraction bytes or repeated layer events.
+
+    Docker downloads a few layers at a time and a layer only reports its size
+    once it starts, so the stream alone can't give a total until the last layer
+    begins — on a real 8-layer pull that was the first 57% of the transfer. If
+    the checker already sized this pull (`expected_bytes`), use it as the total
+    until the stream's own is complete, flagged `total_estimated`, and cap the
+    percentage at 99 so an estimate never claims the download is finished."""
     layer_id = chunk.get("id")
     status = chunk.get("status", "")
     if not layer_id or status not in (
@@ -1744,17 +1768,26 @@ def _record_pull_progress(pull: dict, layers: dict, chunk: dict) -> None:
         sum(layer["total"] for layer in layers.values())
         if all(layer["total"] is not None for layer in layers.values()) else None
     )
+    estimated = False
+    if total_bytes is None and expected_bytes:
+        # never let the estimate sit below what has already arrived
+        total_bytes, estimated = max(expected_bytes, progress_bytes), True
+    percent = (
+        None if total_bytes is None else
+        round(100 * progress_bytes / total_bytes, 2) if total_bytes else 100.0
+    )
+    if estimated and percent is not None:
+        percent = min(percent, 99.0)
     pull.update(
         progress_bytes=progress_bytes,
         total_bytes=total_bytes,
-        percent_complete=(
-            None if total_bytes is None else
-            round(100 * progress_bytes / total_bytes, 2) if total_bytes else 100.0
-        ),
+        percent_complete=percent,
+        total_estimated=estimated,
     )
 
 
-def _pull_image(client, image_name: str, container_name: str, host_id: str):
+def _pull_image(client, image_name: str, container_name: str, host_id: str,
+                expected_bytes: int | None = None):
     """Track a streamed pull until it finishes, fails, or is closed by cancellation."""
     key = _container_key(container_name, host_id)
     pull = {
@@ -1762,7 +1795,10 @@ def _pull_image(client, image_name: str, container_name: str, host_id: str):
         "host_id": host_id,
         "started_at": datetime.datetime.utcnow().isoformat() + "Z",
         "progress_bytes": 0, "total_bytes": None, "percent_complete": None,
+        "total_estimated": False,
     }
+    if expected_bytes:
+        pull.update(total_bytes=expected_bytes, percent_complete=0.0, total_estimated=True)
     layers: dict[str, dict] = {}
     stream = None
     with _pulls_lock:
@@ -1771,7 +1807,7 @@ def _pull_image(client, image_name: str, container_name: str, host_id: str):
         stream = client.api.pull(image_name, stream=True, decode=True)
         for chunk in stream:
             with _pulls_lock:
-                _record_pull_progress(pull, layers, chunk)
+                _record_pull_progress(pull, layers, chunk, expected_bytes)
             yield chunk
     finally:
         with _pulls_lock:
@@ -1836,7 +1872,8 @@ def apply_update(container_name: str, host_id: str = "local",
         # interrupting would risk leaving the container half-swapped.
         _pull_error = None
         _pull_cancelled = False
-        with closing(_pull_image(client, image_name, container_name, host_id)) as pull:
+        with closing(_pull_image(client, image_name, container_name, host_id,
+                                 _expected_download_bytes(container_name, host_id))) as pull:
             for chunk in pull:
                 with _logs_lock:
                     _pull_cancelled = key in _update_cancel

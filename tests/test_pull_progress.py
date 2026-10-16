@@ -236,5 +236,128 @@ class UpdatePullProgressTests(SafetyTestBase):
         self.assertTrue(any("Pull failed" in line for line in self._logs()))
 
 
+class PullEstimateTests(SafetyTestBase):
+    """Docker downloads a few layers at a time and a layer only reports its size
+    once it starts, so the stream alone gave no percentage for the first 57% of
+    a real 8-layer pull. The checker's stored download_size fills that gap."""
+
+    EST = 1000
+
+    def setUp(self):
+        super().setUp()
+        self.mod.AUTH_ENABLED = False
+        self.mod.app.config.update(TESTING=True, SECRET_KEY="test-secret-key")
+        self.mod._active_pulls.clear()
+
+    def _entry(self, chunks, expected: int | None = EST, nth=1):
+        """Feed `chunks` through the tracker and return the API entry after the
+        nth chunk, the way a polling client would see it."""
+        client = mock.Mock()
+        client.api.pull.return_value = iter(chunks)
+        stream = self.mod._pull_image(client, "img:latest", "web", "local", expected)
+        with closing(stream):
+            for _ in range(nth):
+                next(stream)
+            return self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0]
+
+    def test_estimate_is_used_while_later_layers_have_not_reported_a_size(self):
+        pull = self._entry([
+            {"id": "a", "status": "Downloading", "progressDetail": {"current": 100, "total": 400}},
+            {"id": "b", "status": "Waiting"},          # queued: size not known yet
+        ], nth=2)
+        self.assertEqual(pull["total_bytes"], self.EST)
+        self.assertEqual(pull["progress_bytes"], 100)
+        self.assertEqual(pull["percent_complete"], 10.0)
+        self.assertTrue(pull["total_estimated"])
+
+    def test_entry_shows_the_estimate_before_docker_sends_anything(self):
+        """Without it the first poll said null even though we knew the size.
+        The peek has to happen while the stream is still silent: once a chunk
+        arrives the estimate is computed anyway, which hides a missing seed."""
+        seen = []
+
+        def silent_then_one_chunk():
+            seen.append(self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0])
+            yield {"id": "a", "status": "Waiting"}
+
+        client = mock.Mock()
+        client.api.pull.return_value = silent_then_one_chunk()
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local", self.EST)) as stream:
+            next(stream)
+        pull = seen[0]
+        self.assertEqual(
+            (pull["progress_bytes"], pull["total_bytes"], pull["percent_complete"], pull["total_estimated"]),
+            (0, self.EST, 0.0, True),
+        )
+
+    def test_streams_own_total_takes_over_once_every_layer_has_reported(self):
+        pull = self._entry([
+            {"id": "a", "status": "Downloading", "progressDetail": {"current": 100, "total": 400}},
+            {"id": "b", "status": "Downloading", "progressDetail": {"current": 100, "total": 800}},
+        ], nth=2)
+        self.assertEqual((pull["total_bytes"], pull["percent_complete"]), (1200, round(200 / 1200 * 100, 2)))
+        self.assertFalse(pull["total_estimated"], "a real total must not be flagged as an estimate")
+
+    def test_an_estimate_never_claims_the_download_is_finished(self):
+        """The checker's figure can be stale or low. 100 is reserved for the
+        stream's own total; an estimate stops at 99 and the total grows rather
+        than falling below what has already arrived."""
+        pull = self._entry([
+            {"id": "a", "status": "Downloading", "progressDetail": {"current": 1500, "total": 1500}},
+            {"id": "b", "status": "Waiting"},
+        ], nth=2)
+        self.assertEqual(pull["percent_complete"], 99.0)
+        self.assertGreaterEqual(pull["total_bytes"], pull["progress_bytes"])
+        self.assertTrue(pull["total_estimated"])
+
+    def test_no_estimate_behaves_exactly_as_before(self):
+        pull = self._entry([
+            {"id": "a", "status": "Downloading", "progressDetail": {"current": 100, "total": 400}},
+            {"id": "b", "status": "Waiting"},
+        ], expected=None, nth=2)
+        self.assertEqual((pull["total_bytes"], pull["percent_complete"], pull["total_estimated"]),
+                         (None, None, False))
+
+    def test_expected_bytes_come_from_local_state(self):
+        with mock.patch.object(self.mod, "load_state",
+                               return_value={"available": {"web": {"download_size": 398351173}}}):
+            self.assertEqual(self.mod._expected_download_bytes("web", "local"), 398351173)
+
+    def test_expected_bytes_come_from_the_hosts_own_state_not_the_local_one(self):
+        local = {"available": {"web": {"download_size": 111}}}
+        remote = {"available": {"web": {"download_size": 222}}}
+        with mock.patch.object(self.mod, "load_state", return_value=local), \
+             mock.patch.object(self.mod, "load_host_state", return_value=remote) as loader:
+            self.assertEqual(self.mod._expected_download_bytes("web", "site-b"), 222)
+        loader.assert_called_once_with("site-b")
+
+    def test_unusable_estimates_are_ignored(self):
+        for entry in ({}, {"download_size": None}, {"download_size": 0},
+                      {"download_size": -5}, {"download_size": True}, {"download_size": "12"}):
+            with mock.patch.object(self.mod, "load_state",
+                                   return_value={"available": {"web": entry}}):
+                self.assertIsNone(self.mod._expected_download_bytes("web", "local"), entry)
+
+    def test_state_failures_never_break_an_update(self):
+        with mock.patch.object(self.mod, "load_state", side_effect=RuntimeError("corrupt state.json")):
+            self.assertIsNone(self.mod._expected_download_bytes("web", "local"))
+
+    def test_apply_update_feeds_the_checkers_estimate_into_the_live_entry(self):
+        """The whole path: state -> apply_update -> /api/pulls."""
+        d = FakeDocker(self.mod)
+        d.new("web")
+        self.state["available"]["web"] = {"download_size": self.EST}
+        seen = []
+
+        def chunks():
+            yield {"id": "a", "status": "Waiting"}
+            seen.append(self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0])
+            yield {"error": "stop here"}
+
+        d.api.pull.return_value = chunks()
+        self._run(self.mod.apply_update, d, "web", "local", reserved=True)
+        self.assertEqual((seen[0]["total_bytes"], seen[0]["total_estimated"]), (self.EST, True))
+
+
 if __name__ == "__main__":
     unittest.main()

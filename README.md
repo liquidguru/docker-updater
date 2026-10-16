@@ -407,13 +407,14 @@ Container state (update availability, defer decisions, history, backups) is pers
       "started_at": "2026-10-16T17:00:00Z",
       "progress_bytes": 5242880,
       "total_bytes": 10485760,
-      "percent_complete": 50.0
+      "percent_complete": 50.0,
+      "total_estimated": false
     }
   ]
 }
 ```
 
-`progress_bytes` sums Docker's latest downloaded-byte count for each layer, without counting repeated events or extraction bytes twice. Cached layers require zero download bytes. `total_bytes` and `percent_complete` are `null` until Docker reports sizes for all discovered non-cached layers. Totals are based on Docker's stream, not a pre-fetched manifest; they can change as more layers are discovered. A fully cached pull may report zero total bytes and 100%, or remain unknown if Docker emits no layer details. 100% means the reported download bytes are complete, not that extraction or container recreation has finished.
+`progress_bytes` sums Docker's latest downloaded-byte count for each layer, without counting repeated events or extraction bytes twice. Cached layers require zero download bytes. Docker only reports a layer's size when that layer starts downloading, and it downloads a few at a time, so its stream can't give a total until the last layer begins — on a large image that is more than half of the transfer. To avoid a blank progress bar, `total_bytes` starts as the compressed download size the update check already computed from the registry (only the layers your host doesn't have) and `total_estimated` is `true`. Once Docker has reported every layer, the stream's own total replaces it and `total_estimated` becomes `false`. While it is `true`, `percent_complete` never exceeds 99, so an estimate can't claim the download is finished. If there is no estimate — the container hasn't been checked, or the registry couldn't be read — `total_bytes` and `percent_complete` are `null` until Docker reports every layer. A fully cached pull may report zero total bytes and 100%, or remain unknown if Docker emits no layer details. 100% means the reported download bytes are complete, not that extraction or container recreation has finished. On a slow disk extraction can take longer than the download itself, so an entry may sit at 100% for a while.
 
 Pulls appear before the Docker request starts and disappear when the stream finishes, fails, or is cancelled, before container recreation. No active pulls returns `{"pulls": []}`. IDs are container names on the local host and `host_id:container` on remote hosts; separate updates of the same image remain separate entries. Tracking is in memory for this app process, is cleared on restart, and does not include pulls initiated by other tools or direct Docker commands.
 
