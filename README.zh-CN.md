@@ -393,6 +393,33 @@ docker-updater 可以接收 GitHub Webhook 事件，并将其转发为推送通�
 
 ---
 
+## 镜像拉取进度 API
+
+`GET /api/pulls` 返回本应用发起且当前正在进行的所有镜像拉取，包括远程主机更新和自更新。它与其他 API 使用相同的会话鉴权（启用鉴权时请先登录）。更新期间可以轮询此接口：
+
+```json
+{
+  "pulls": [
+    {
+      "id": "web",
+      "image": "nginx:latest",
+      "container": "web",
+      "host_id": "local",
+      "started_at": "2026-10-16T17:00:00Z",
+      "progress_bytes": 5242880,
+      "total_bytes": 10485760,
+      "percent_complete": 50.0
+    }
+  ]
+}
+```
+
+`progress_bytes` 汇总 Docker 为每个镜像层报告的最新下载字节数，不会重复累加进度事件或解压字节。已缓存的层需要下载零字节。在 Docker 报告所有已发现且未缓存的层的大小之前，`total_bytes` 和 `percent_complete` 为 `null`。总量来自 Docker 事件流，而非预先获取的 Manifest，因此发现新层时总量可能变化。完全缓存的拉取可能显示总量零字节且进度为 100%，若 Docker 不报告层信息则仍为未知。100% 仅表示已报告的下载字节完成，不代表解压或容器重建已完成。
+
+拉取在 Docker 请求开始前出现，在流结束、失败或取消后立即移除，不会保留到容器重建阶段。没有进行中的拉取时返回 `{"pulls": []}`。本地主机的 ID 为容器名，远程主机为 `host_id:container`；同一镜像的不同更新会分别列出。跟踪数据仅保存在本应用进程的内存中，重启后清空，不包含其他工具或直接执行 Docker 命令发起的拉取。
+
+---
+
 ## 备份与回滚
 
 docker-updater 为每次更新提供两层安全保护。
