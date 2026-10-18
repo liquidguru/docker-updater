@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.18] — 2026-10-19
+
+### Added
+- **Only notify about new updates** (Settings, off by default) — until now every scheduled check sent a notification listing *every* pending update, so one you hadn't got around to applying was repeated daily (#30). With the option on, each update is announced once. The notification lists only the new ones and adds a line saying how many earlier ones are still pending, so a shorter message doesn't look like updates went missing. "New" is decided by the registry digest, not the container name: a newer release of something you've been ignoring alerts again, and so does an update that returns after you applied the previous one. Deferral still works as before (a deferred update is held back and announced once when the deferral expires). Records are kept per container and per host in `data/state.json`, are written even while the option is off (so turning it on doesn't re-announce what's already known), and an offline host's records survive its outage. If a notification fails to send, nothing is recorded and the next check tries again — `send_notification` now reports whether the message actually went out. English and Chinese
+
 ## [1.15.17] — 2026-10-17
 
 ### Added

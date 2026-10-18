@@ -314,6 +314,12 @@ If you don't set `NOTIFY_URL`, docker-updater generates a unique private topic o
 
 > **Why unique topics?** ntfy.sh topics are public by default — anyone who knows a topic name can read its messages. docker-updater's auto-generated topics are random strings that aren't published anywhere, keeping your notifications private.
 
+### Only notify about new updates
+
+By default every scheduled check lists **everything** still waiting, so an update you haven't applied yet is repeated every day. Turn on **Settings → Only notify about new updates** and each update is announced once: later checks stay silent until something new arrives, and a notification that does go out lists just the new ones, with a note of how many earlier ones are still pending.
+
+"New" means a different image from the one you were last told about, so a newer release on top of an update you've been ignoring alerts again. An update you apply and that later returns is announced again too. Deferred updates stay out of notifications as before, and appear once if their deferral expires. Updates are remembered per container and per host, in `data/state.json`; if a notification fails to send, it is retried at the next check. Switching the option on doesn't re-announce what is already known. It is **off** by default, so nothing changes unless you turn it on.
+
 ### Custom notifications
 
 Set `NOTIFY_URL` to any [Apprise-compatible URL](https://github.com/caronc/apprise/wiki):

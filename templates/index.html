@@ -429,7 +429,7 @@
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false };
+  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false };
 
   async function loadSettings() {
     try {
@@ -487,12 +487,15 @@
     const hours   = parseInt(document.getElementById('backup-hours').value);
     const restartStack   = document.getElementById('restart-stack')?.checked || false;
     const cleanupImages  = document.getElementById('cleanup-images')?.checked || false;
+    const notifyNewOnly  = document.getElementById('notify-new-only')?.checked || false;
     const schedule = collectSchedule();
     _settings = { ..._settings, backup_enabled: enabled, backup_hours: hours,
-                  restart_stack: restartStack, cleanup_images: cleanupImages };
+                  restart_stack: restartStack, cleanup_images: cleanupImages,
+                  notify_new_only: notifyNewOnly };
     if (schedule) _settings.check_schedule = schedule;
     const payload = { backup_enabled: enabled, backup_hours: hours,
-      restart_stack: restartStack, cleanup_images: cleanupImages };
+      restart_stack: restartStack, cleanup_images: cleanupImages,
+      notify_new_only: notifyNewOnly };
     if (schedule) payload.check_schedule = schedule;
     const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload) });
@@ -624,6 +627,18 @@
             <option value="168" ${_settings.backup_hours==168 ? 'selected' : ''}>${t('settings.7d')}</option>
           </select>
           <span class="setting-note">${t('settings.backup_note')}</span>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">${t('settings.notify_new_label')}</div>
+            <div class="setting-desc">${t('settings.notify_new_desc')}</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="notify-new-only" ${_settings.notify_new_only ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>
       <div class="settings-card">

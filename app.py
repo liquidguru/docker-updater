@@ -71,7 +71,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.17"
+APP_VERSION          = "1.15.18"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1003,17 +1003,22 @@ def get_notify_info() -> dict | None:
     return {"subscribe": subscribe, "auto": not bool(NOTIFY_URL)}
 
 
-def send_notification(title: str, body: str) -> None:
+def send_notification(title: str, body: str) -> bool:
+    """Send a push notification. Returns True only if it was handed to Apprise,
+    so callers that track "already told the user" don't record a send that
+    never happened."""
     url = get_effective_notify_url()
     if not url:
-        return
+        return False
     try:
         a = apprise.Apprise()
         a.add(url)
-        a.notify(title=title, body=body)
+        ok = a.notify(title=title, body=body)
         print(f"[notify] Sent: {title!r}")
+        return True if ok is None else bool(ok)
     except Exception as e:
         print(f"[notify] Failed: {e}")
+        return False
 
 
 
@@ -1588,6 +1593,26 @@ def _scan_host(client, host_id: str) -> dict:
     return available
 
 
+def _record_notified(delivered: list, active_keys: dict) -> None:
+    """Remember which update (by registry digest) each container was last
+    notified about, and forget containers that no longer have one pending.
+
+    Recorded on every notifying check, not only when "only notify about new
+    updates" is on, so switching the option on later doesn't re-announce
+    everything that is already known."""
+    with _state_lock:
+        state = load_state()
+        notified = dict(state.get("notified") or {})
+        for host_id, keys in active_keys.items():
+            for k in [k for k in notified if k.startswith(f"{host_id}:") and k not in keys]:
+                del notified[k]
+        for _label, _name, key, digest in delivered:
+            if digest:
+                notified[key] = digest
+        state["notified"] = notified
+        save_state(state)
+
+
 def check_for_updates(notify: bool = False) -> None:
     global _check_running
     if not _check_lock.acquire(blocking=False):
@@ -1595,8 +1620,13 @@ def check_for_updates(notify: bool = False) -> None:
     _check_running = True
     print(f"[checker] Starting digest check (notify={notify})...")
 
-    # Collect all updates for notification: list of (host_label, container_name)
-    all_updates: list[tuple[str | None, str]] = []
+    # Collect all updates for notification: (host_label, container_name,
+    # notified-key, remote_digest). The key/digest let "only notify about new
+    # updates" tell an update it already announced from one that just arrived.
+    all_updates: list[tuple[str | None, str, str, str | None]] = []
+    # Per scanned host: keys of every container that still has an update
+    # (deferred ones included), so stale "already notified" records get pruned.
+    active_keys: dict[str, set[str]] = {}
     # Deferring a container should mean "stop telling me about this one", not
     # just move it to another tab — so the notification list uses the same
     # active-deferral rule as the dashboard (issue #20). Deferrals still expire
@@ -1621,7 +1651,9 @@ def check_for_updates(notify: bool = False) -> None:
             _local_deferred = state.get("deferred", {})
             updates = [n for n, v in local_available.items() if v["has_update"]]
             notify_updates = [n for n in updates if _not_deferred(_local_deferred, n)]
-            all_updates.extend([(None, n) for n in notify_updates])
+            all_updates.extend([(None, n, f"local:{n}", local_available[n].get("remote_digest"))
+                                for n in notify_updates])
+            active_keys["local"] = {f"local:{n}" for n in updates}
             _held = len(updates) - len(notify_updates)
             deferred_count += _held
             print(f"[checker:local] Done — {len(updates)} update(s)."
@@ -1646,7 +1678,9 @@ def check_for_updates(notify: bool = False) -> None:
                 updates = [n for n, v in available.items() if v["has_update"]]
                 notify_updates = [n for n in updates
                                   if _not_deferred(hs.get("deferred", {}), n)]
-                all_updates.extend([(host_name, n) for n in notify_updates])
+                all_updates.extend([(host_name, n, f"{host_id}:{n}", available[n].get("remote_digest"))
+                                    for n in notify_updates])
+                active_keys[host_id] = {f"{host_id}:{n}" for n in updates}
                 _held = len(updates) - len(notify_updates)
                 deferred_count += _held
                 print(f"[checker:{host_id}] Done — {len(updates)} update(s)."
@@ -1663,10 +1697,25 @@ def check_for_updates(notify: bool = False) -> None:
         print(f"[checker] Complete — {count} total update(s)."
               + (f" Registry rate limit — {_rl}." if _rl else ""))
 
+        delivered: list[tuple[str | None, str, str, str | None]] = []
         if notify and count > 0:
+            with _state_lock:
+                _st = load_state()
+            _notified = _st.get("notified") or {}
+            if _st.get("notify_new_only", False):
+                # An update is "new" if its registry digest differs from the one
+                # we last told the user about. No digest -> can't tell -> report.
+                fresh = [u for u in all_updates if not (u[3] and _notified.get(u[2]) == u[3])]
+            else:
+                fresh = list(all_updates)
+            earlier = count - len(fresh)
+        else:
+            fresh, earlier = [], 0
+
+        if fresh:
             # Group by host label for a clean notification body
             by_host: dict[str, list[str]] = {}
-            for host_label, cname in all_updates:
+            for host_label, cname, _k, _d in fresh:
                 display_label = ui_t("notify.local_host") if host_label is None else host_label
                 by_host.setdefault(display_label, []).append(cname)
 
@@ -1682,10 +1731,18 @@ def check_for_updates(notify: bool = False) -> None:
             # missing, and something deferred months ago becomes invisible.
             if deferred_count:
                 body += "\n" + ui_t("notify.deferred_held", count=deferred_count)
-            send_notification(
-                title=(ui_t("notify.updates_title_plural", count=count) if count != 1 else ui_t("notify.updates_title", count=count)),
+            # Likewise for updates left out because we already announced them.
+            if earlier:
+                body += "\n" + ui_t("notify.earlier_pending", count=earlier)
+            n_fresh = len(fresh)
+            if send_notification(
+                title=(ui_t("notify.updates_title_plural", count=n_fresh) if n_fresh != 1 else ui_t("notify.updates_title", count=n_fresh)),
                 body=body,
-            )
+            ):
+                delivered = fresh
+
+        if notify:
+            _record_notified(delivered, active_keys)
 
     except Exception as e:
         print(f"[checker] Fatal error: {e}")
@@ -3128,6 +3185,7 @@ def api_settings_get():
         "backup_hours":   state.get("backup_hours", 24),
         "restart_stack":  state.get("restart_stack", False),
         "cleanup_images": state.get("cleanup_images", False),
+        "notify_new_only": state.get("notify_new_only", False),
         "theme":          state.get("theme", DEFAULT_THEME),
         "themes":         THEMES,
         "check_schedule": state.get("check_schedule") or _default_schedule_from_env(),
@@ -3163,6 +3221,8 @@ def api_settings_post():
             state["restart_stack"] = bool(data["restart_stack"])
         if "cleanup_images" in data:
             state["cleanup_images"] = bool(data["cleanup_images"])
+        if "notify_new_only" in data:
+            state["notify_new_only"] = bool(data["notify_new_only"])
         if "theme" in data and data["theme"] in THEMES:
             state["theme"] = data["theme"]
         if "check_schedule" in data:
