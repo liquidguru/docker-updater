@@ -16,7 +16,7 @@
 
 ![备份页 — 保留的回滚点，可一键回滚或删除](screenshot-backups.jpeg)
 
-![设置页 — 备份保留开关和保留时长](screenshot-settings.jpeg)
+![设置页 — 检查计划、备份保留、通知和清理选项](screenshot-settings.jpeg)
 
 ![主机页 — 本地与远程 Docker 主机管理](screenshot-hosts.jpeg)
 

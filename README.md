@@ -14,7 +14,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 ![Backups tab — kept rollback points with one-click rollback or delete](screenshot-backups.jpeg)
 
-![Settings tab — backup retention toggle and window](screenshot-settings.jpeg)
+![Settings tab — schedule, backup retention, notification and cleanup options](screenshot-settings.jpeg)
 
 ![Hosts tab — local and remote Docker host management](screenshot-hosts.jpeg)
 
