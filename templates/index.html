@@ -118,8 +118,13 @@
   .pull-text { font-size:12px; color:var(--text); }
   .pull-bar { height:4px; border-radius:2px; background:var(--surface2); overflow:hidden; margin-top:5px; }
   .pull-bar > span { display:block; height:100%; width:0; background:var(--blue); border-radius:2px; transition:width .4s ease; }
-  .pull-bar.indeterminate > span { width:35%; animation:pull-slide 1.5s ease-in-out infinite; }
-  @keyframes pull-slide { 0% { margin-left:-35%; } 100% { margin-left:100%; } }
+  /* No sliding stripe: it snaps back to the start every cycle, and two updates
+     at once meant two of them, out of step, for minutes. A slow fade in place
+     says "working" without moving. */
+  .pull-bar.indeterminate > span { width:100%; animation:pull-pulse 2.6s ease-in-out infinite; }
+  @keyframes pull-pulse { 0%, 100% { opacity:.25; } 50% { opacity:.6; } }
+  /* Unpacking is a second stage, not the download going backwards. */
+  .pull-bar.unpack > span { background:var(--purple); }
   @media (prefers-reduced-motion: reduce) { .pull-bar.indeterminate > span { animation:none; width:100%; opacity:.45; } }
   .card-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 
@@ -777,7 +782,16 @@
     // the container — say so, rather than going quiet. Only once we've seen it.
     if (!p) return pullSeen.has(key) ? {text: t('pull.applying'), pct: null} : null;
     const phase = p.phase || 'downloading';
-    if (phase === 'extracting') return {text: t('pull.extracting'), pct: null};
+    if (phase === 'extracting') {
+      // Unpacking has no byte count, but whole layers finishing is real progress.
+      // One layer (or an older server) has nothing to count: just wait calmly.
+      const n = p.layers_total || 0;
+      if (n > 1) {
+        const done = Math.min(p.layers_done || 0, n);
+        return {text: t('pull.extracting_layers', {done, total: n}), pct: 100 * done / n, unpack: true};
+      }
+      return {text: t('pull.extracting'), pct: null};
+    }
     if (phase === 'finishing')  return {text: t('pull.finishing'),  pct: null};
     if (phase === 'starting')   return {text: t('pull.starting'),   pct: p.percent_complete ?? null};
     const done = _human_size_js(p.progress_bytes);
@@ -789,10 +803,21 @@
     };
   }
 
+  // Which kind of bar a status needs. A change of kind rebuilds the bar, so it
+  // starts afresh instead of animating the download's full bar back to empty.
+  function pullBarKind(s) { return s.pct == null ? 'wait' : s.unpack ? 'unpack' : 'download'; }
+
+  // The status poll rebuilds every card each 2s while anything updates, and a
+  // rebuilt element restarts its animation — so a fade would jerk back to its
+  // start every couple of seconds. Pinning the phase to the wall clock makes a
+  // new bar carry on exactly where the old one was. Matches pull-pulse's 2.6s.
+  const PULL_PULSE_MS = 2600;
+
   function pullBarHtml(s) {
-    return s.pct == null
-      ? '<div class="pull-bar indeterminate"><span></span></div>'
-      : `<div class="pull-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(s.pct)}"><span style="width:${s.pct}%"></span></div>`;
+    const kind = pullBarKind(s);
+    return kind === 'wait'
+      ? `<div class="pull-bar indeterminate" data-kind="wait"><span style="animation-delay:-${Date.now() % PULL_PULSE_MS}ms"></span></div>`
+      : `<div class="pull-bar${kind === 'unpack' ? ' unpack' : ''}" data-kind="${kind}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(s.pct)}"><span style="width:${s.pct}%"></span></div>`;
   }
 
   function pullProgressHtml(key) {
@@ -813,10 +838,9 @@
       if (!el) { card.querySelector('.card-info').insertAdjacentHTML('beforeend', pullProgressHtml(key)); return; }
       el.querySelector('.pull-text').textContent = s.text;
       const bar = el.querySelector('.pull-bar');
-      const determinate = s.pct != null;
-      if (bar.classList.contains('indeterminate') === determinate) {
+      if (bar.dataset.kind !== pullBarKind(s)) {
         bar.outerHTML = pullBarHtml(s);                 // switching kind: rebuild once
-      } else if (determinate) {
+      } else if (s.pct != null) {
         bar.firstElementChild.style.width = s.pct + '%';
         bar.setAttribute('aria-valuenow', Math.round(s.pct));
       }

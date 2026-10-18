@@ -71,7 +71,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.18"
+APP_VERSION          = "1.15.19"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1904,6 +1904,11 @@ def _record_pull_progress(pull: dict, layers: dict, chunk: dict,
         percent_complete=percent,
         total_estimated=estimated,
         phase=_pull_phase(layers, pull.get("phase", "starting")),
+        # Layers Docker has announced so far, and how many are fully unpacked.
+        # Unpacking has no byte count of its own, so this is the only honest
+        # progress there is while a big image is being extracted.
+        layers_done=sum(1 for layer in layers.values() if layer["stage"] == "done"),
+        layers_total=len(layers),
     )
 
 
@@ -1917,6 +1922,7 @@ def _pull_image(client, image_name: str, container_name: str, host_id: str,
         "started_at": datetime.datetime.utcnow().isoformat() + "Z",
         "progress_bytes": 0, "total_bytes": None, "percent_complete": None,
         "total_estimated": False, "phase": "starting",
+        "layers_done": 0, "layers_total": 0,
     }
     if expected_bytes:
         pull.update(total_bytes=expected_bytes, percent_complete=0.0, total_estimated=True)

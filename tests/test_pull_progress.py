@@ -540,5 +540,111 @@ class PullPhaseTests(unittest.TestCase):
         self.assertEqual(pull["phase"], "extracting")
 
 
+class PullLayerCountTests(unittest.TestCase):
+    """While an image unpacks there are no bytes to count, so how many layers
+    are fully unpacked is the only honest progress the card can show."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = load_app_module()
+
+    def setUp(self):
+        setattr(self.mod, "AUTH_ENABLED", False)
+        self.mod.app.config.update(TESTING=True, SECRET_KEY="test-secret-key")
+        self.mod._active_pulls.clear()
+
+    def counts(self, chunks):
+        """(layers_done, layers_total) after each chunk, as a poller would see it."""
+        client = mock.Mock()
+        client.api.pull.return_value = iter(chunks)
+        out = []
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local")) as stream:
+            for _ in chunks:
+                next(stream)
+                pull = self.mod._active_pulls["web"]
+                out.append((pull["layers_done"], pull["layers_total"]))
+        return out
+
+    @staticmethod
+    def ev(layer, status, **detail):
+        chunk = {"id": layer, "status": status}
+        if detail:
+            chunk["progressDetail"] = detail
+        return chunk
+
+    def test_a_new_entry_has_no_layers_yet(self):
+        client = mock.Mock()
+        client.api.pull.return_value = iter([{"status": "Pulling from library/img", "id": "latest"}])
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local")) as stream:
+            next(stream)  # the entry is registered once the pull is under way
+            pull = self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0]
+        self.assertEqual((pull["layers_done"], pull["layers_total"]), (0, 0))
+
+    def test_layers_are_counted_as_announced_and_finished(self):
+        ev = self.ev
+        self.assertEqual(self.counts([
+            ev("a", "Pulling fs layer"),
+            ev("b", "Pulling fs layer"),
+            ev("c", "Pulling fs layer"),
+            ev("a", "Downloading", current=1, total=10),
+            ev("a", "Download complete"),
+            ev("a", "Extracting"),
+            ev("a", "Pull complete"),
+            ev("b", "Extracting"),
+            ev("b", "Pull complete"),
+            ev("c", "Pull complete"),
+        ]), [
+            (0, 1), (0, 2), (0, 3), (0, 3), (0, 3),
+            (0, 3),               # unpacking is not finished
+            (1, 3), (1, 3), (2, 3), (3, 3),
+        ])
+
+    def test_cached_layers_count_as_done(self):
+        """A partly cached image opens with a run of "Already exists"."""
+        ev = self.ev
+        self.assertEqual(self.counts([
+            ev("a", "Already exists"), ev("b", "Already exists"), ev("c", "Pulling fs layer"),
+        ]), [(1, 1), (2, 2), (2, 3)])
+
+    def test_repeated_events_do_not_count_a_layer_twice(self):
+        ev = self.ev
+        self.assertEqual(self.counts([
+            ev("a", "Pull complete"), ev("a", "Pull complete"), ev("a", "Downloading", current=1, total=2),
+        ]), [(1, 1), (1, 1), (1, 1)])
+
+    def test_a_finished_layer_is_never_unfinished(self):
+        ev = self.ev
+        self.assertEqual(self.counts([
+            ev("a", "Pull complete"), ev("a", "Waiting"), ev("a", "Extracting"),
+        ])[-1], (1, 1))
+
+    def test_the_closing_line_and_unrelated_events_leave_the_counts_alone(self):
+        ev = self.ev
+        self.assertEqual(self.counts([
+            ev("a", "Pull complete"),
+            {"status": "Digest: sha256:abc"},
+            {"status": "Status: Downloaded newer image for img:latest"},
+            {"id": "latest", "status": "Pulling from library/img"},
+        ]), [(1, 1)] * 4)
+
+    def test_done_never_exceeds_total(self):
+        ev = self.ev
+        for done, total in self.counts([
+            ev("a", "Pulling fs layer"), ev("b", "Already exists"), ev("a", "Pull complete"),
+            ev("c", "Pull complete"),
+        ]):
+            self.assertLessEqual(done, total)
+
+    def test_counts_are_exposed_through_the_api(self):
+        ev = self.ev
+        client = mock.Mock()
+        client.api.pull.return_value = iter([ev("a", "Pull complete"), ev("b", "Extracting")])
+        with closing(self.mod._pull_image(client, "img:latest", "web", "local")) as stream:
+            next(stream)
+            next(stream)
+            pull = self.mod.app.test_client().get("/api/pulls").get_json()["pulls"][0]
+        self.assertEqual((pull["layers_done"], pull["layers_total"]), (1, 2))
+
+
 if __name__ == "__main__":
     unittest.main()

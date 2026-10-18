@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.15.19] — 2026-10-19
+
+### Changed
+- **Calmer, more useful unpacking display on the update card.** While an image unpacks, the card's bar was a stripe sliding across and snapping back to the start every 1.5 seconds — and with two updates running, two of them, out of step, for minutes. Distracting, and it said nothing about progress. Now the card reads `Unpacking the image · 3 of 8 layers done` with a bar filled to that fraction. It is purple rather than the download's blue so the switch reads as a second stage, not the download running backwards, and the bar is rebuilt on the change instead of animating from full to empty. A big image can spend most of its time on one layer, so the count may sit still near the end — honest, and quiet. The remaining "waiting" states (starting, finishing, a single-layer image, an older server) no longer slide: a slow fade in place, and static if you have asked your system for reduced motion. The fade's phase is pinned to the clock, because while anything updates the page re-fetches status every 2 seconds and rebuilds every card, and a rebuilt element restarts its animation — which is also why the old stripe seemed to keep jumping back to the start. Found by logging the bar's element id once a second during a real update. English and Chinese
+
+### Added
+- **`layers_done` and `layers_total` on each pull in `GET /api/pulls`** — how many of the layers Docker has announced so far are fully unpacked (layers already on the host count as done). Unpacking has no byte count of its own, so this is the only real progress available once the download ends. `layers_total` can grow while the download is still under way, so it is only meaningful when `phase` is `extracting`. Existing fields are unchanged
+
 ## [1.15.18] — 2026-10-19
 
 ### Added
