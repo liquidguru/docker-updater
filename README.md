@@ -14,7 +14,7 @@ Instead of automatically pulling and restarting containers the moment a new imag
 
 ![Backups tab — kept rollback points with one-click rollback or delete](screenshot-backups.jpeg)
 
-![Settings tab — schedule, backup retention, notification and cleanup options](screenshot-settings.jpeg)
+![Settings tab — schedule, backup retention, notification, cleanup and unused-image options](screenshot-settings.jpeg)
 
 ![Hosts tab — local and remote Docker host management](screenshot-hosts.jpeg)
 
@@ -85,6 +85,7 @@ The WebUI supports **English** and **简体中文**:
 - **Container log viewer** — a **Logs** button on every container card opens the last 200 lines of `docker logs` in a modal, with a running/stopped status pill and a Refresh button; useful for diagnosing why a freshly-updated container isn't behaving
 - **Smart history icons** — recent updates show ✅ (succeeded or running & up-to-date), ⚠️ (errored but container still running), or ❌ (errored and stopped), with a `● running / ● stopped` dot for every row; hover the icon to see the error message without opening the log
 - **Push notifications** — auto-generates a private ntfy topic on first run; or bring your own Apprise URL (ntfy, Pushover, Discord, Slack, etc.)
+- **Unused images (opt-in)** — an extra setting, off by default and invisible until switched on, that also checks tagged images no running container uses and tells you when the registry has a newer version. Informational only: it never pulls anything, because an old image may belong to a database whose data a newer version can't read
 - **GitHub notifications** — optional webhook endpoint receives issue, PR, star, push, and release events from any of your repos and forwards them as push notifications
 - **Scheduled checks** — configurable from the **Settings** tab with presets (every 6/12 hours, daily, weekly, monthly) or a custom cron expression; changes apply immediately with no restart, and the next run time is shown. The schedule persists on the data volume, so it survives restarts, recreation, and image updates. Notifications only fire on the scheduled run, not on startup or manual checks
 - **Image size on the card** — each container card shows its image's on-disk size; when an update is available, a **↓** chip shows how much a pull will actually download — only the layers your host doesn't already have — and a **▤ new/total** chip shows the layer count, with the full breakdown on hover
@@ -174,6 +175,7 @@ Save as `docker-compose.yml`, create a `data/` directory and the optional `.env`
 | `CHECK_TIME` | `03:00` | **Initial default** for the check schedule — `HH:MM` for a daily check, or a full 5-field cron expression (e.g. `0 3 * * 0` for weekly on Sunday, `0 */6 * * *` for every 6 hours). Once a schedule is set in the **Settings** tab it is saved to the data volume and takes precedence over this variable — see [Check schedule](#check-schedule). |
 | `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check — any [tz database name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *(auto)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications. If not set, a unique private ntfy.sh topic is generated automatically. |
+| `CHECK_UNRUNNING_IMAGES` | `false` | **Initial default** for also checking images that no running container uses — see [Unused images](#unused-images-opt-in). Informational only; nothing is ever pulled. A choice saved in **Settings** takes precedence. |
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Secret for verifying GitHub webhook signatures. Required if using the GitHub notifications feature. |
 | `DOCKERHUB_USERNAME` | *(empty)* | Docker Hub username, to authenticate digest checks and raise the rate limit — see [Docker Hub rate limits](#docker-hub-rate-limits). Needs `DOCKERHUB_TOKEN` too. |
 | `DOCKERHUB_TOKEN` | *(empty)* | Docker Hub **personal access token** (not your password). Only ever sent to Docker Hub; never stored in `state.json`. |
@@ -397,6 +399,26 @@ docker-updater can receive GitHub webhook events and forward them as push notifi
    - **On failure**: removes the failed new container, renames `_old` back, and restarts the previous version
 
 Container state (update availability, defer decisions, history, backups) is persisted to `data/state.json`.
+
+---
+
+## Unused images (opt-in)
+
+By default docker-updater only looks at containers that are running. Turn on **Settings → Also check images that no container is using** (or start with `CHECK_UNRUNNING_IMAGES=true` to set the initial default — a choice saved in Settings wins) and it also compares the tagged images stored on each host that no running container uses with their registries.
+
+![Images tab — unused images with a newer version, each with the docker pull command to run yourself](screenshot-images.jpeg)
+
+It is **off by default, and while it is off there is no trace of it**: nothing is scanned or stored, and the dashboard shows no Images tab and no hint that the feature exists (apart from the switch in Settings itself). Switching it off again deletes what it stored.
+
+**It never pulls anything.** The **Images** tab lists each image with a status and, when a newer version exists, shows the `docker pull` command for you to run yourself — there is deliberately no button. An image you haven't run for a long time may belong to something that holds data, a database for example, and a newer version can refuse the data the old one wrote. Read the release notes and back up the data first.
+
+What it looks at:
+
+- Only images that carry a tag and came from a registry. Untagged images (what every update leaves behind) and locally built images are skipped.
+- Images a running container is using are left to the normal check, so nothing appears twice. An image kept only by a stopped container does count as unused.
+- Every host you have added, not just the local one.
+
+Unused images with a newer version are added to the scheduled check's push notification, marked "(unused image)", and they follow **Only notify about new updates** like everything else. Each one costs a registry lookup, so a host with many images takes noticeably longer to check — 32 images took about 70 seconds in testing — and the lookups count towards [Docker Hub rate limits](#docker-hub-rate-limits).
 
 ---
 

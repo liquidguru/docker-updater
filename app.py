@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from urllib.parse import urlsplit
 
 import apprise
@@ -71,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.15.19"
+APP_VERSION          = "1.16.0"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -90,6 +91,10 @@ CHECK_TIME            = os.environ.get("CHECK_TIME", "03:00")
 TIMEZONE              = os.environ.get("TIMEZONE", "Australia/Melbourne")
 NOTIFY_URL            = os.environ.get("NOTIFY_URL", "").strip()
 GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
+# Also look at images no running container uses (issue #31). Off unless asked
+# for; this is only the initial default — a choice saved in Settings wins.
+CHECK_UNRUNNING_IMAGES = os.environ.get("CHECK_UNRUNNING_IMAGES", "").strip().lower() in (
+    "1", "true", "yes", "on")
 
 # Optional Docker Hub credentials for digest checks (issue #17). Anonymous
 # requests are rate limited per IP, and every container costs one manifest
@@ -1593,6 +1598,108 @@ def _scan_host(client, host_id: str) -> dict:
     return available
 
 
+def unused_images_enabled(state: dict | None = None) -> bool:
+    """Whether to look at images no running container uses. Off by default, and
+    while it is off nothing about it is scanned, stored, returned or shown. A
+    choice saved in Settings wins over the CHECK_UNRUNNING_IMAGES default."""
+    if state is None:
+        with _state_lock:
+            state = load_state()
+    if "check_unused_images" in state:
+        return bool(state["check_unused_images"])
+    return CHECK_UNRUNNING_IMAGES
+
+
+def _local_digest_for_tag(attrs: dict, tag: str) -> str | None:
+    """The digest this host recorded for the repository `tag` belongs to.
+
+    Stricter than get_local_digest(), which falls back to the first digest of
+    any repository: an image can carry digests for several, and comparing the
+    wrong one against a tag's registry would report an update that isn't."""
+    registry, repo, _t = parse_image(tag)
+    candidates = _docker_repo_candidates(registry, repo)
+    for ref in attrs.get("RepoDigests") or []:
+        if ref.split("@", 1)[0] in candidates:
+            return _digest_from_ref(ref)
+    return None
+
+
+def _scan_unused_images(client, host_id: str) -> dict:
+    """Tagged images on this host that no running container uses, each compared
+    with its registry. Returns {tag: info}.
+
+    Strictly informational (issue #31): nothing here is ever pulled for you.
+    An old image may belong to something you haven't run for a long time — a
+    database, say — and a newer version can refuse the data the old one wrote,
+    so telling you is the whole job and the decision stays yours.
+
+    What counts as unused: any image carrying a tag that no *running* container
+    uses (running ones are already covered by the normal scan). Left out on
+    purpose:
+      * untagged images — what every update leaves behind, and pure noise here;
+      * images with no RepoDigests — locally built or never pulled, so there is
+        nothing to compare;
+      * anything a running container is using, matched both by image ID and by
+        the reference the container was created from, so a quirk in how a
+        daemon reports IDs can't make a running container's own image appear
+        here as if it were unused."""
+    used_ids: set[str] = set()
+    used_refs: set[tuple[str, str, str]] = set()
+    for c in client.containers.list():
+        if c.attrs.get("Image"):
+            used_ids.add(c.attrs["Image"])
+        ref = (c.attrs.get("Config") or {}).get("Image")
+        if ref:
+            used_refs.add(parse_image(ref))
+
+    found: dict[str, dict] = {}
+    for image in client.images.list():
+        attrs = image.attrs or {}
+        if attrs.get("Id") in used_ids:
+            continue
+        tags = [t for t in (attrs.get("RepoTags") or []) if t and "<none>" not in t]
+        if not tags or not attrs.get("RepoDigests"):
+            continue
+        holder = types.SimpleNamespace(image=image)   # what the get_local_* helpers read
+        image_id = get_local_image_id(holder)
+        platform = get_local_platform(holder)
+        for tag in tags:
+            if parse_image(tag) in used_refs:
+                continue
+            local_digest = _local_digest_for_tag(attrs, tag)
+            if not local_digest:
+                continue
+            remote_digest = get_remote_digest(tag, local_digest, image_id, platform)
+            has_update = bool(remote_digest and remote_digest != local_digest)
+            print(f"[checker:{host_id}] unused image {tag}: "
+                  f"[{'UPDATE' if has_update else 'ok' if remote_digest else 'no digest'}]")
+            found[tag] = {
+                "image": tag,
+                "local_digest": local_digest,
+                "remote_digest": remote_digest,
+                "has_update": has_update,
+                "checked": remote_digest is not None,
+                "checked_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "size": attrs.get("Size"),
+            }
+    return found
+
+
+def _note_unused_images(found: dict, host_id: str, host_label: str | None,
+                        all_updates: list, active_keys: dict) -> None:
+    """Fold unused images with an update into the notification list. They are
+    keyed `host:image:tag` — a container name can't contain `:`, so these never
+    collide with containers — and must count as "still pending" for pruning, or
+    their notified records would be dropped every check and re-announced."""
+    for tag, info in found.items():
+        if not info.get("has_update"):
+            continue
+        key = f"{host_id}:image:{tag}"
+        active_keys.setdefault(host_id, set()).add(key)
+        all_updates.append((host_label, ui_t("notify.unused_image_item", name=tag),
+                            key, info.get("remote_digest")))
+
+
 def _record_notified(delivered: list, active_keys: dict) -> None:
     """Remember which update (by registry digest) each container was last
     notified about, and forget containers that no longer have one pending.
@@ -1633,6 +1740,7 @@ def check_for_updates(notify: bool = False) -> None:
     # normally, at which point the container starts being reported again.
     _today = datetime.date.today().isoformat()
     deferred_count = 0
+    _unused_on = unused_images_enabled()
 
     def _not_deferred(deferred: dict, name: str) -> bool:
         d = (deferred or {}).get(name)
@@ -1658,6 +1766,16 @@ def check_for_updates(notify: bool = False) -> None:
             deferred_count += _held
             print(f"[checker:local] Done — {len(updates)} update(s)."
                   + (f" {_held} deferred, not notified." if _held else ""))
+            if _unused_on:
+                try:
+                    _found = _scan_unused_images(local_client, "local")
+                    with _state_lock:
+                        _s = load_state()
+                        _s["unused_images"] = _found
+                        save_state(_s)
+                    _note_unused_images(_found, "local", None, all_updates, active_keys)
+                except Exception as e:
+                    print(f"[checker:local] Unused-image scan failed: {e}")
         except Exception as e:
             print(f"[checker:local] Fatal: {e}")
 
@@ -1674,6 +1792,13 @@ def check_for_updates(notify: bool = False) -> None:
                 hs["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
                 hs["status"]     = "online"
                 hs.pop("last_error", None)
+                if _unused_on:
+                    try:
+                        hs["unused_images"] = _scan_unused_images(client, host_id)
+                        _note_unused_images(hs["unused_images"], host_id, host_name,
+                                            all_updates, active_keys)
+                    except Exception as e:
+                        print(f"[checker:{host_id}] Unused-image scan failed: {e}")
                 save_host_state(host_id, hs)
                 updates = [n for n, v in available.items() if v["has_update"]]
                 notify_updates = [n for n in updates
@@ -2871,6 +2996,25 @@ def api_pulls():
     return response
 
 
+def _unused_images_view(state: dict, remote_hosts_info: list) -> list:
+    """Unused images from every host's last check, updates first."""
+    rows = []
+    def add(host_id, host_name, store):
+        for tag, info in (store or {}).items():
+            rows.append({
+                "image": tag, "host_id": host_id, "host_name": host_name,
+                "status": ("update" if info.get("has_update") else
+                           "ok" if info.get("checked") else "unknown"),
+                "checked_at": info.get("checked_at"), "size": info.get("size"),
+            })
+    add("local", "Local", state.get("unused_images"))
+    for h in remote_hosts_info:
+        add(h["id"], h["name"], load_host_state(h["id"]).get("unused_images"))
+    order = {"update": 0, "unknown": 1, "ok": 2}
+    rows.sort(key=lambda r: (order.get(r["status"], 9), r["host_name"], r["image"]))
+    return rows
+
+
 @app.route("/api/status")
 def api_status():
     today = datetime.date.today().isoformat()
@@ -3032,7 +3176,7 @@ def api_status():
                    "builtin": True}
                   ] + remote_hosts_info
 
-    return jsonify({
+    payload = {
         "containers":   containers,
         "last_check":   state.get("last_check"),
         "check_running": _check_running,
@@ -3040,7 +3184,12 @@ def api_status():
         "next_check":   _next_check_time(),
         "notify":       get_notify_info(),
         "hosts":        hosts_full,
-    })
+    }
+    # Absent — not empty — while the option is off, so nothing in the page can
+    # tell the feature exists until it has been switched on.
+    if unused_images_enabled(state):
+        payload["unused_images"] = _unused_images_view(state, remote_hosts_info)
+    return jsonify(payload)
 
 
 @app.route("/api/check", methods=["POST"])
@@ -3182,6 +3331,16 @@ def api_backup_mounts(name):
         return jsonify({"error": f"Could not read mounts: {e}"}), 500
 
 
+def _forget_unused_images(state: dict) -> None:
+    """Switching the option off removes what it stored, so nothing about it
+    lingers in state.json — and switching it back on starts from a clean slate,
+    announcing whatever is still out of date afresh."""
+    state.pop("unused_images", None)
+    notified = state.get("notified") or {}
+    for key in [k for k in notified if ":image:" in k]:
+        del notified[key]
+
+
 @app.route("/api/settings", methods=["GET"])
 def api_settings_get():
     with _state_lock:
@@ -3192,6 +3351,7 @@ def api_settings_get():
         "restart_stack":  state.get("restart_stack", False),
         "cleanup_images": state.get("cleanup_images", False),
         "notify_new_only": state.get("notify_new_only", False),
+        "check_unused_images": unused_images_enabled(state),
         "theme":          state.get("theme", DEFAULT_THEME),
         "themes":         THEMES,
         "check_schedule": state.get("check_schedule") or _default_schedule_from_env(),
@@ -3229,6 +3389,10 @@ def api_settings_post():
             state["cleanup_images"] = bool(data["cleanup_images"])
         if "notify_new_only" in data:
             state["notify_new_only"] = bool(data["notify_new_only"])
+        if "check_unused_images" in data:
+            state["check_unused_images"] = bool(data["check_unused_images"])
+            if not state["check_unused_images"]:
+                _forget_unused_images(state)
         if "theme" in data and data["theme"] in THEMES:
             state["theme"] = data["theme"]
         if "check_schedule" in data:
@@ -3246,6 +3410,11 @@ def api_settings_post():
             if cl in ("en", "zh-CN"):
                 state["client_lang"] = cl
         save_state(state)
+    if "check_unused_images" in data and not data["check_unused_images"]:
+        for host in load_hosts():     # remote hosts keep their own copy
+            hs = load_host_state(host["id"])
+            if hs.pop("unused_images", None) is not None:
+                save_host_state(host["id"], hs)
     if "check_schedule" in data:
         _reschedule_check()  # outside the lock — _build_check_trigger takes it too
     return jsonify({"ok": True, "next_check": _next_check_time()})

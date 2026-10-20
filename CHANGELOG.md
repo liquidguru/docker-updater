@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.16.0] — 2026-10-21
+
+### Added
+- **Check images that no running container uses** (opt-in, issue #31) — until now only running containers were looked at, so an image sitting on the host (a database you haven't started in months, a tool you keep around) could be many versions behind with nothing to say so. Switch on **Settings → Also check images that no container is using** (or `CHECK_UNRUNNING_IMAGES=true` for the initial default; a saved choice wins) and each tagged image that no running container uses is compared with its registry. **Informational only: nothing is ever pulled.** The new **Images** tab lists each image and, when a newer version exists, shows the `docker pull` command for you to run — there is deliberately no button, because an old image may belong to something with data and a newer version can refuse the data the old one wrote. **Off by default, and with no trace while off**: nothing is scanned or stored, the status data carries no `unused_images` key at all, and the tab doesn't exist in the page (apart from the switch itself); switching it off deletes what was stored. Untagged images (what every update leaves behind) and locally built ones are skipped; an image a running container is using is left to the normal check, matched by image ID *and* by the reference the container was created from, so a daemon that reports IDs differently can't make a running container's own image show up as unused. Updates are added to the scheduled notification marked "(unused image)" and follow *Only notify about new updates*; remote hosts are scanned too. On a real host with 70 images it took about 70 seconds to check 32 unused ones. English and Chinese
+
 ## [1.15.19] — 2026-10-19
 
 ### Changed

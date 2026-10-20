@@ -126,6 +126,10 @@
   /* Unpacking is a second stage, not the download going backwards. */
   .pull-bar.unpack > span { background:var(--purple); }
   @media (prefers-reduced-motion: reduce) { .pull-bar.indeterminate > span { animation:none; width:100%; opacity:.45; } }
+  /* Unused images (#31): the tab and everything in it exists only while the option is on. */
+  .images-note { font-size:12.5px; line-height:1.5; color:var(--muted); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px; }
+  .images-pull { margin-top:3px; font-size:12px; color:var(--muted); }
+  .images-pull code { font-family:monospace; background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 6px; color:var(--text); user-select:all; }
   .card-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 
   .host-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--muted); white-space:nowrap; }
@@ -289,6 +293,7 @@
   <button class="tab"        data-tab="ok"       onclick="switchTab('ok')"><span data-i18n="tab.up_to_date">Up to Date</span> <span class="badge" id="tab-count-ok">0</span></button>
   <button class="tab"        data-tab="unknown"  onclick="switchTab('unknown')"><span data-i18n="tab.unchecked">Unchecked</span> <span class="badge" id="tab-count-unknown">0</span></button>
   <button class="tab"        data-tab="all"      onclick="switchTab('all')"><span data-i18n="tab.all">All</span> <span class="badge" id="tab-count-all">0</span></button>
+  <button class="tab"        data-tab="images"   id="tab-images" style="display:none" onclick="switchTab('images')"><span data-i18n="tab.images">Images</span> <span class="badge" id="tab-count-images">0</span></button>
   <button class="tab"        data-tab="hosts"    onclick="switchTab('hosts')"><span data-i18n="tab.hosts">Hosts</span> <span class="badge" id="tab-count-hosts">0</span></button>
   <button class="tab"        data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Settings</button>
 </div>
@@ -317,6 +322,7 @@
   <div id="hosts-panel" style="display:none"></div>
 
   <div id="backups-panel" style="display:none"></div>
+  <div id="images-panel" style="display:none"></div>
   <div id="settings-panel" style="display:none"></div>
 
   <div class="section-title" id="history-title" data-i18n="history.title">Recent Updates</div>
@@ -418,6 +424,7 @@
 <script>
   let allContainers = [];
   let allHosts = [];
+  let allImages = null;    // unused images; null while that option is off, so the page has no trace of it
   let multiHost = false;   // true when >1 host configured
   let currentTab = 'update';
   let selectedNames = new Set();
@@ -434,7 +441,7 @@
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false };
+  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false, check_unused_images: false };
 
   async function loadSettings() {
     try {
@@ -493,14 +500,16 @@
     const restartStack   = document.getElementById('restart-stack')?.checked || false;
     const cleanupImages  = document.getElementById('cleanup-images')?.checked || false;
     const notifyNewOnly  = document.getElementById('notify-new-only')?.checked || false;
+    const checkUnused    = document.getElementById('check-unused')?.checked || false;
+    const unusedChanged  = checkUnused !== !!_settings.check_unused_images;
     const schedule = collectSchedule();
     _settings = { ..._settings, backup_enabled: enabled, backup_hours: hours,
                   restart_stack: restartStack, cleanup_images: cleanupImages,
-                  notify_new_only: notifyNewOnly };
+                  notify_new_only: notifyNewOnly, check_unused_images: checkUnused };
     if (schedule) _settings.check_schedule = schedule;
     const payload = { backup_enabled: enabled, backup_hours: hours,
       restart_stack: restartStack, cleanup_images: cleanupImages,
-      notify_new_only: notifyNewOnly };
+      notify_new_only: notifyNewOnly, check_unused_images: checkUnused };
     if (schedule) payload.check_schedule = schedule;
     const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload) });
@@ -511,8 +520,47 @@
     } else {
       if (el) el.style.color = '';
       renderNextCheck(d.next_check);
+      if (unusedChanged) fetchStatus();   // show or remove the Images tab right away
     }
     document.getElementById('backup-options').style.display = enabled ? '' : 'none';
+  }
+
+  // <unused-images>
+  // Images no running container uses (#31). Informational only — there is
+  // deliberately no button that pulls anything. Plain functions of their inputs
+  // so tests/test_ui_unused_images.py can run them under node.
+  function imageCardHtml(i, multi) {
+    const badges = {
+      update:  `<span class="badge-status badge-update">${t('badge.update')}</span>`,
+      ok:      `<span class="badge-status badge-ok">${t('badge.ok')}</span>`,
+      unknown: `<span class="badge-status badge-unknown">${t('badge.unknown')}</span>`,
+    };
+    const checked = i.checked_at ? t('card.checked', {when: timeAgo(i.checked_at)}) : t('card.not_checked');
+    const size = i.size ? `<span class="sep">·</span><span class="size-chip" title="${t('card.size_title')}">${fmtBytes(i.size)}</span>` : '';
+    const host = multi ? `<span class="sep">·</span><span class="host-chip">${esc(i.host_id === 'local' ? t('hosts.local') : i.host_name)}</span>` : '';
+    const hint = i.status === 'update'
+      ? `<div class="images-pull">${t('images.pull_hint')} <code>docker pull ${esc(i.image)}</code></div>` : '';
+    return `<div class="container-card status-${esc(i.status)}">
+      <div class="card-info">
+        <div class="card-name">${esc(i.image)}</div>
+        <div class="card-meta">${checked}${size}${host}</div>
+        ${hint}
+      </div>
+      <div class="card-actions">${badges[i.status] || ''}</div>
+    </div>`;
+  }
+
+  function imagesPanelHtml(images, multi) {
+    const note = `<div class="images-note">${t('images.note')}</div>`;
+    if (!images.length) {
+      return note + `<div class="empty"><span class="emoji">🗂</span><strong>${t('empty.images_title')}</strong><p style="margin-top:6px">${t('empty.images_desc')}</p></div>`;
+    }
+    return note + images.map(i => imageCardHtml(i, multi)).join('');
+  }
+  // </unused-images>
+
+  function renderImagesPanel() {
+    document.getElementById('images-panel').innerHTML = imagesPanelHtml(allImages || [], multiHost);
   }
 
   function renderBackupsPanel() {
@@ -682,6 +730,18 @@
           </div>
           <div id="prune-list" style="width:100%"></div>
           <div id="prune-result" style="margin-top:8px;font-size:13px"></div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">${t('settings.unused_label')}</div>
+            <div class="setting-desc">${t('settings.unused_desc')}</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="check-unused" ${_settings.check_unused_images ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
         </div>
       </div>`;
     applyScheduleVisibility();
@@ -1017,6 +1077,7 @@
       allContainers = data.containers || [];
       allHosts      = data.hosts || [];
       multiHost     = allHosts.length > 1;
+      allImages     = Array.isArray(data.unused_images) ? data.unused_images : null;
 
       // Notify banner (auto-generated topic)
       if (data.notify && data.notify.auto && !localStorage.getItem('notify_dismissed')) {
@@ -1056,6 +1117,8 @@
       renderHostsPanel();
     } else if (currentTab === 'backups') {
       renderBackupsPanel();
+    } else if (currentTab === 'images') {
+      renderImagesPanel();
     } else if (currentTab === 'settings') {
       // settings panel is static, no re-render needed
     } else {
@@ -1077,6 +1140,11 @@
     document.getElementById('tab-count-unknown').textContent  = counts.unknown;
     document.getElementById('tab-count-all').textContent      = containers.length;
     document.getElementById('tab-count-hosts').textContent    = hosts.length;
+    // The Images tab exists only while the option is on.
+    document.getElementById('tab-images').style.display = allImages ? '' : 'none';
+    document.getElementById('tab-count-images').textContent =
+      allImages ? allImages.filter(i => i.status === 'update').length : 0;
+    if (!allImages && currentTab === 'images') switchTab('update');
   }
 
   function switchTab(tab) {
@@ -1086,17 +1154,20 @@
     const isHosts    = tab === 'hosts';
     const isSettings = tab === 'settings';
     const isBackups  = tab === 'backups';
-    const isContent  = !isHosts && !isSettings && !isBackups;
+    const isImages   = tab === 'images';
+    const isContent  = !isHosts && !isSettings && !isBackups && !isImages;
     document.getElementById('container-list').style.display = isContent ? '' : 'none';
     document.getElementById('select-toolbar').style.display = isContent ? '' : 'none';
     document.getElementById('hosts-panel').style.display    = isHosts ? '' : 'none';
     document.getElementById('backups-panel').style.display  = isBackups ? '' : 'none';
+    document.getElementById('images-panel').style.display   = isImages ? '' : 'none';
     document.getElementById('settings-panel').style.display = isSettings ? '' : 'none';
     document.getElementById('history-title').style.display  = isContent ? '' : 'none';
     document.getElementById('history-list').style.display   = isContent ? '' : 'none';
     if (isHosts) renderHostsPanel();
     else if (isSettings) renderSettingsPanel();
     else if (isBackups) renderBackupsPanel();
+    else if (isImages) renderImagesPanel();
     else { renderContainerList(allContainers, tab); updateSelectionUI(); }
   }
 
