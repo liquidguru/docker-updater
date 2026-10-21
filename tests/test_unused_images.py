@@ -329,7 +329,7 @@ class CheckIntegrationTests(CheckBase):
         self.assertIn("mysql:8", self.host_states["vps"]["unused_images"])
         self.assertNotIn("mysql:8", self.state.get("unused_images", {}))
         # with updates on two hosts the message groups them by host
-        self.assertIn("VPS: mysql:8 (unused image)", body)
+        self.assertIn("VPS:\nmysql:8 (unused image)", body)
 
     def test_the_same_tag_on_two_hosts_is_tracked_separately(self):
         hosts = [{"id": "vps", "name": "VPS", "url": "tcp://vps"}]

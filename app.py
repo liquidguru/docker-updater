@@ -72,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.16.0"
+APP_VERSION          = "1.16.1"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1700,6 +1700,19 @@ def _note_unused_images(found: dict, host_id: str, host_label: str | None,
                             key, info.get("remote_digest")))
 
 
+def _notification_body(by_host: dict[str, list[str]]) -> str:
+    """One name per line, so a long list stays readable at a glance (issue #31).
+
+    With a single host the names stand alone; with several, each host's names
+    follow a "Host:" line and the hosts are separated by a blank line.
+    """
+    if len(by_host) == 1:
+        return "\n".join(sorted(next(iter(by_host.values()))))
+    return "\n\n".join(
+        f"{host}:\n" + "\n".join(sorted(names)) for host, names in by_host.items()
+    )
+
+
 def _record_notified(delivered: list, active_keys: dict) -> None:
     """Remember which update (by registry digest) each container was last
     notified about, and forget containers that no longer have one pending.
@@ -1844,13 +1857,7 @@ def check_for_updates(notify: bool = False) -> None:
                 display_label = ui_t("notify.local_host") if host_label is None else host_label
                 by_host.setdefault(display_label, []).append(cname)
 
-            if len(by_host) == 1:
-                body = ", ".join(sorted(next(iter(by_host.values()))))
-            else:
-                body = "\n".join(
-                    f"{hl}: {', '.join(sorted(names))}"
-                    for hl, names in by_host.items()
-                )
+            body = _notification_body(by_host)
             # Deferred containers aren't listed, but say how many are being held
             # back — otherwise a shorter notification looks like updates went
             # missing, and something deferred months ago becomes invisible.

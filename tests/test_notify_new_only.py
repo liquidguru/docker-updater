@@ -177,6 +177,40 @@ class NotifyNewOnlyTests(NotifyNewOnlyBase):
         self.assertEqual(self.state["notified"], {})
 
 
+class NotificationLayoutTests(NotifyNewOnlyBase):
+    """One name per line rather than a comma-separated run (issue #31)."""
+
+    def test_one_host_lists_one_name_per_line_sorted(self):
+        body = self.body({"web": _upd(), "db": _upd(), "cache": _upd()}, new_only=False)
+        self.assertEqual(body, "cache\ndb\nweb")
+
+    def test_a_single_update_is_just_its_name(self):
+        self.assertEqual(self.body({"web": _upd()}, new_only=False), "web")
+
+    def test_names_are_never_joined_with_commas(self):
+        body = self.body({"web": _upd(), "db": _upd()}, new_only=False)
+        self.assertNotIn(",", body)
+
+    def test_several_hosts_get_a_heading_each_and_a_blank_line_between(self):
+        body = self.body({"web": _upd(), "app": _upd()}, new_only=False,
+                         remote={"vps": {"mysql:8": _upd(), "db": _upd()}})
+        self.assertEqual(body, "Local:\napp\nweb\n\nVps:\ndb\nmysql:8")
+
+    def test_footer_lines_follow_the_list_on_their_own_lines(self):
+        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        self.check({"web": _upd(), "db": _upd()})          # announce both
+        body = self.body({"web": _upd(), "db": _upd(), "cache": _upd()},
+                         deferred={"db": {"until": tomorrow}})
+        lines = body.splitlines()
+        self.assertEqual(lines[0], "cache")
+        self.assertEqual(len(lines), 3, f"name, deferred note, earlier note: {body!r}")
+        self.assertIn("1", lines[1])
+        self.assertIn("1", lines[2])
+
+    def test_helper_sorts_and_handles_one_host_directly(self):
+        self.assertEqual(self.mod._notification_body({"Local": ["b", "a"]}), "a\nb")
+
+
 class NotifyNewOnlyPersistenceTests(NotifyNewOnlyBase):
     def test_records_survive_a_restart(self):
         """Through the real load_state/save_state, so the record is plain JSON

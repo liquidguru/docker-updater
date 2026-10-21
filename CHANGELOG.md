@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.16.1] — 2026-10-22
+
+### Changed
+- **Update notifications list one name per line** (suggested on issue #31) — the message used to run every name together separated by commas, which got crowded once a few updates, or a few long image names, arrived at once. Each update now has its own line, in alphabetical order. With updates on more than one host, each host's names sit under a `Host:` heading with a blank line between hosts. The "(N deferred, not shown)" and "(N already notified, still pending)" notes still follow the list. Applies to all notifications, not only unused images
+
 ## [1.16.0] — 2026-10-21
 
 ### Added
