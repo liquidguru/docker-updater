@@ -72,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.16.2"
+APP_VERSION          = "1.16.3"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -480,6 +480,45 @@ def _mounts_from_hcfg(hcfg: dict):
     return out or None
 
 
+# HostConfig keys the recreate code sets itself, plus the one that belongs to the
+# old container alone. Every other key is carried over as the daemon reported it.
+_HOSTCONFIG_HANDLED = frozenset({
+    "Binds", "Mounts", "PortBindings", "NetworkMode", "RestartPolicy",
+    "ContainerIDFile",
+})
+
+
+def _carry_over_hostconfig(hc: dict, hcfg: dict) -> dict:
+    """Copy the HostConfig settings `create_host_config` was not told about.
+
+    Recreation used to rebuild HostConfig from a short list of fields, so
+    anything else the container was started with (a GPU reservation such as
+    `--gpus` or `runtime: nvidia`, memory and CPU limits, ulimits, shm size, log
+    options, init, a read-only root and so on) silently vanished on every
+    update. An nvidia image then crash-looped without its GPU (issue #32). The
+    values come from the daemon's own inspect output, so it accepts them back.
+    """
+    for key, value in hcfg.items():
+        if key not in _HOSTCONFIG_HANDLED and key not in hc:
+            hc[key] = value
+    return hc
+
+
+def _container_extras(cfg: dict) -> dict:
+    """Container-level settings `create_container` needs beyond the ones passed
+    explicitly: the terminal and stdin flags and the stop signal and timeout."""
+    extras: dict = {}
+    if cfg.get("Tty"):
+        extras["tty"] = True
+    if cfg.get("OpenStdin"):
+        extras["stdin_open"] = True
+    if cfg.get("StopSignal"):
+        extras["stop_signal"] = cfg["StopSignal"]
+    if cfg.get("StopTimeout") is not None:
+        extras["stop_timeout"] = cfg["StopTimeout"]
+    return extras
+
+
 def _human_size(n: float) -> str:
     n = float(n or 0)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -833,6 +872,7 @@ def _run_self_update_helper() -> None:
             pid_mode=hcfg.get("PidMode") or "", ipc_mode=hcfg.get("IpcMode") or "",
             tmpfs=hcfg.get("Tmpfs"),
         )
+        _carry_over_hostconfig(hc, hcfg)
 
         simple_net_name = next(iter(full_nets), None)
         simple_nc = None
@@ -854,6 +894,7 @@ def _run_self_update_helper() -> None:
             working_dir=cfg.get("WorkingDir", ""),
             ports=_exposed_ports(cfg) or None,
             host_config=hc, networking_config=simple_nc,
+            **_container_extras(cfg),
         )
 
         if network_mode != "host" and len(full_nets) > 1:
@@ -2298,6 +2339,7 @@ def apply_update(container_name: str, host_id: str = "local",
             pid_mode=hcfg.get("PidMode") or "", ipc_mode=hcfg.get("IpcMode") or "",
             tmpfs=hcfg.get("Tmpfs"),
         )
+        _carry_over_hostconfig(hc, hcfg)
 
         short_id = old_id[:12]
         full_nets = {
@@ -2332,6 +2374,7 @@ def apply_update(container_name: str, host_id: str = "local",
                 working_dir=cfg.get("WorkingDir", ""),
                 ports=_exposed_ports(cfg) or None,
                 host_config=hc, networking_config=simple_nc,
+                **_container_extras(cfg),
             )
 
             # The primary network (simple_net_name) is already attached at create

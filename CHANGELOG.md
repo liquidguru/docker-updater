@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.16.3] — 2026-10-23
+
+### Fixed
+- **Updating a container silently dropped settings it was started with** (reported on issue #32, where an `nvidia` image crash-looped after an update and was rolled back) — the replacement container was built from a short list of fields, so everything else vanished: GPU reservations (`--gpus`, `runtime: nvidia`), memory and CPU limits, ulimits, shm size, log options, sysctls, `init`, a read-only root filesystem, group-add and more. The new container now starts with every setting the old one had, taken straight from what Docker reported, apart from the few docker-updater sets itself (mounts, ports, network and restart policy). Terminal and stdin flags (`tty`, `stdin_open`) and the stop signal and timeout are carried over too. Applies to normal updates and to docker-updater's own self-update. Checked on a real Docker host: a throwaway container with a memory limit, shm size, ulimit, log options, sysctl, init, read-only root, tty and a custom stop signal lost all of them across an update before this change and none after. A healthcheck defined only on the container (not in the image) is still not carried over
+
 ## [1.16.2] — 2026-10-22
 
 ### Fixed
