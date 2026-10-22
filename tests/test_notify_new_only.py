@@ -191,10 +191,47 @@ class NotificationLayoutTests(NotifyNewOnlyBase):
         body = self.body({"web": _upd(), "db": _upd()}, new_only=False)
         self.assertNotIn(",", body)
 
-    def test_several_hosts_get_a_heading_each_and_a_blank_line_between(self):
+    def test_several_hosts_get_a_heading_each_and_a_gap_between(self):
         body = self.body({"web": _upd(), "app": _upd()}, new_only=False,
                          remote={"vps": {"mysql:8": _upd(), "db": _upd()}})
-        self.assertEqual(body, "Local:\napp\nweb\n\nVps:\ndb\nmysql:8")
+        self.assertEqual(body, "Local:\napp\nweb\n\u00a0\nVps:\ndb\nmysql:8")
+
+    def test_the_gap_between_hosts_survives_telegram(self):
+        """Apprise's Telegram output squeezes empty lines out, so a plain
+        "\\n\\n" ran the hosts together. The gap must be a line with content."""
+        body = self.body({"web": _upd()}, new_only=False,
+                         remote={"vps": {"db": _upd()}})
+        self.assertNotIn("\n\n", body)
+        self.assertIn("\n\u00a0\n", body)
+
+    def test_gap_reaches_telegram_through_apprise(self):
+        """The real thing: what apprise would actually post to Telegram."""
+        import importlib
+        import sys
+
+        import requests
+        body = self.mod._notification_body({"Local": ["web"], "Vps": ["db"]})
+        posted = []
+
+        def fake_post(_url, data=None, **_kw):
+            posted.append(data)
+            return mock.Mock(status_code=200, content=b'{"ok":true}', text='{"ok":true}')
+
+        # The test loader swaps apprise for a stand-in; this needs the real one.
+        with mock.patch.dict(sys.modules):
+            sys.modules.pop("apprise", None)
+            try:
+                apprise = importlib.import_module("apprise")
+            except ImportError:
+                self.skipTest("apprise is not installed")
+            apobj = apprise.Apprise()
+            apobj.add("tgram://123456789:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/12345")
+            with mock.patch.object(requests, "post", side_effect=fake_post):
+                self.assertTrue(apobj.notify(title="t", body=body))
+        raw = posted[0]
+        text = json.loads(raw)["text"] if isinstance(raw, (str, bytes)) else raw["text"]
+        self.assertIn("\u00a0", text, "the gap between hosts was squeezed out")
+        self.assertEqual(text.count("Vps:"), 1)
 
     def test_footer_lines_follow_the_list_on_their_own_lines(self):
         tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()

@@ -72,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.16.1"
+APP_VERSION          = "1.16.2"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1700,15 +1700,22 @@ def _note_unused_images(found: dict, host_id: str, host_label: str | None,
                             key, info.get("remote_digest")))
 
 
+# Between hosts in a notification. The middle line holds a no-break space, not nothing:
+# Telegram (through apprise) squeezes empty lines out.
+_HOST_GAP = "\n\u00a0\n"
+
+
 def _notification_body(by_host: dict[str, list[str]]) -> str:
     """One name per line, so a long list stays readable at a glance (issue #31).
 
     With a single host the names stand alone; with several, each host's names
-    follow a "Host:" line and the hosts are separated by a blank line.
+    follow a "Host:" line and the hosts are separated by a blank line. The
+    blank line holds a no-break space rather than nothing: Telegram (through
+    apprise) squeezes an empty line out, which ran the hosts together.
     """
     if len(by_host) == 1:
         return "\n".join(sorted(next(iter(by_host.values()))))
-    return "\n\n".join(
+    return _HOST_GAP.join(
         f"{host}:\n" + "\n".join(sorted(names)) for host, names in by_host.items()
     )
 

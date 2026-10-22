@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.16.2] — 2026-10-22
+
+### Fixed
+- **Telegram ran the hosts of a multi-host notification together** (reported on issue #31) — v1.16.1 separated each host's block with a blank line, but Telegram, through apprise, squeezes empty lines out, so `Local:` and the next host's heading sat straight under the previous list. The gap is now a line holding a no-break space, which Telegram keeps; other services show it as an ordinary blank line. Single-host notifications are unchanged
+
 ## [1.16.1] — 2026-10-22
 
 ### Changed
