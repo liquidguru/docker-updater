@@ -29,6 +29,7 @@
 | `AUTH_USERNAME` | 面板登录用户名 |
 | `AUTH_PASSWORD` | 面板登录密码 |
 | `FLASK_SECRET_KEY` | 可选的会话签名密钥；未设置时会在 `/app/data/.secret_key` 自动生成 |
+| `API_KEY` | 可选的只读密钥，供仪表盘和小组件使用，详见[只读 API 密钥](#只读-api-密钥) |
 
 使用 Docker Compose 时，在 `docker-compose.yml` 同目录创建 `.env`：
 
@@ -62,6 +63,21 @@ docker compose logs --tail=100 docker-updater
 文件名必须是 `.env` 而不是 `.env.txt`，等号两侧不要加空格；可执行 `chmod 600 .env` 限制权限，并且不要公开文件内容。会话有效期为 **7 天**。`/webhook/github` 无需登录即可访问，但仍依赖 `GITHUB_WEBHOOK_SECRET`。将 WebUI 暴露到公网时，请在前端配置 HTTPS。
 
 > **修改密码不会使已有会话失效。** 会话由 `FLASK_SECRET_KEY` 签名，与密码无关，因此在修改密码之前签发的会话仍然有效，直到过期（最长 7 天）。如果你是因为怀疑密码泄露而修改密码，请同时轮换签名密钥以使所有现有会话失效：设置新的 `FLASK_SECRET_KEY`，或删除 `data/.secret_key` 让程序重新生成，然后重建容器。
+
+### 只读 API 密钥
+
+Homepage、Homarr 等仪表盘只需要*查看*数量，但让它们登录就得交出管理员密码，而该密码同样可以触发更新和回滚。请改为设置可选的 `API_KEY`（至少 16 个字符，例如 `openssl rand -hex 24`）：
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" http://your-host:9292/api/status
+```
+
+- 它**仅适用于 `GET /api/status`**。其他所有接口以及面板本身仍然需要登录。它无法发起更新、回滚或检查，也不会创建会话。
+- 未设置 `AUTH_USERNAME` 和 `AUTH_PASSWORD` 时它不起作用（此时面板本来就是开放的）；短于 16 个字符的密钥会被忽略，并在日志中给出警告。
+- 不设置则一切照旧。
+- 持有该密钥的人可以在 `/api/status` 中读取所有容器名称、镜像和主机，因此请当作机密对待；更换时修改变量并重建容器即可。
+
+Homepage 的社区小组件正在开发中（[gethomepage/homepage#7305](https://github.com/gethomepage/homepage/discussions/7305)），它可以使用此密钥。
 
 ## 语言
 
@@ -158,6 +174,7 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+      API_KEY: ${API_KEY:-}
       DOCKERHUB_USERNAME: ${DOCKERHUB_USERNAME:-}
       DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
 ```
@@ -180,6 +197,7 @@ services:
 | `GITHUB_WEBHOOK_SECRET` | *（空）* | 验证 GitHub Webhook 签名的密钥。使用 GitHub 通知功能时必须配置。 |
 | `AUTH_USERNAME` | *（空）* | 面板登录用户名；必须同时设置 `AUTH_PASSWORD` 才会启用鉴权。 |
 | `AUTH_PASSWORD` | *（空）* | 面板登录密码；绝不会写入 `state.json`。 |
+| `API_KEY` | *（空）* | 可选的只读密钥，仅可用于 `GET /api/status`，这样仪表盘小组件无需持有管理员密码。需要已启用登录且至少 16 个字符；详见[只读 API 密钥](#只读-api-密钥)。 |
 | `FLASK_SECRET_KEY` | *（自动生成）* | 可选的会话签名密钥；省略时持久化到 `/app/data/.secret_key`。 |
 | `DOCKERHUB_USERNAME` | *（空）* | Docker Hub 用户名，用于对检查更新的请求进行认证以提高速率限制。必须同时设置 `DOCKERHUB_TOKEN`。 |
 | `DOCKERHUB_TOKEN` | *（空）* | Docker Hub **个人访问令牌**（不是密码）。仅发送给 Docker Hub；绝不会写入 `state.json`。 |

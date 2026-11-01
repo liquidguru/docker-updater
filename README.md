@@ -28,6 +28,7 @@ The dashboard remains open by default for backward compatibility. On public or u
 | `AUTH_USERNAME` | Dashboard username |
 | `AUTH_PASSWORD` | Dashboard password |
 | `FLASK_SECRET_KEY` | Optional session-signing key; otherwise generated at `/app/data/.secret_key` |
+| `API_KEY` | Optional read-only key for dashboards and widgets, see [Read-only API key](#read-only-api-key) |
 
 For Docker Compose, create `.env` beside `docker-compose.yml`:
 
@@ -61,6 +62,21 @@ Successful setup logs `[auth] Login required (user='admin')`; `[auth] Open acces
 Use the exact filename `.env` (not `.env.txt`), avoid spaces around `=`, protect it with `chmod 600 .env`, and never publish its contents. Sessions last **7 days**. `/webhook/github` remains reachable without a login and still relies on `GITHUB_WEBHOOK_SECRET`. Put the WebUI behind HTTPS when exposing it publicly.
 
 > **Changing the password does not log existing sessions out.** Sessions are signed with `FLASK_SECRET_KEY`, not derived from the password, so a session issued before a password change stays valid until it expires (up to 7 days). If you're changing the password because you think it leaked, rotate the signing key at the same time to invalidate every existing session — either set a new `FLASK_SECRET_KEY`, or delete `data/.secret_key` so a fresh one is generated — then recreate the container.
+
+### Read-only API key
+
+Dashboards such as [Homepage](https://gethomepage.dev) or Homarr only need to *see* the counts, yet signing them in would mean handing them the admin password, which can also trigger updates and rollbacks. Set an optional `API_KEY` instead (at least 16 characters, for example `openssl rand -hex 24`):
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" http://your-host:9292/api/status
+```
+
+- It works for **`GET /api/status` only**. Every other endpoint, and the dashboard itself, still needs the login. It cannot start an update, a rollback or a check, and it does not create a session.
+- It does nothing unless `AUTH_USERNAME` and `AUTH_PASSWORD` are set (without them the dashboard is open anyway), and a key shorter than 16 characters is ignored with a warning in the log.
+- Leave it unset and nothing changes.
+- Anyone holding the key can read every container name, image and host in `/api/status`, so treat it as a secret, and rotate it by changing the variable and recreating the container.
+
+A community widget for Homepage is in development ([gethomepage/homepage#7305](https://github.com/gethomepage/homepage/discussions/7305)); it can use this key.
 
 ## Language
 
@@ -157,6 +173,7 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-}
       AUTH_PASSWORD: ${AUTH_PASSWORD:-}
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-}
+      API_KEY: ${API_KEY:-}
       DOCKERHUB_USERNAME: ${DOCKERHUB_USERNAME:-}
       DOCKERHUB_TOKEN: ${DOCKERHUB_TOKEN:-}
 ```
@@ -181,6 +198,7 @@ Save as `docker-compose.yml`, create a `data/` directory and the optional `.env`
 | `DOCKERHUB_TOKEN` | *(empty)* | Docker Hub **personal access token** (not your password). Only ever sent to Docker Hub; never stored in `state.json`. |
 | `AUTH_USERNAME` | *(empty)* | Dashboard login name; authentication requires this and `AUTH_PASSWORD`. |
 | `AUTH_PASSWORD` | *(empty)* | Dashboard password; never stored in `state.json`. |
+| `API_KEY` | *(empty)* | Optional read-only key for `GET /api/status` only, so a dashboard widget need not hold the admin password. Needs login enabled and at least 16 characters; see [Read-only API key](#read-only-api-key). |
 | `FLASK_SECRET_KEY` | *(generated)* | Optional session-signing key; persisted as `/app/data/.secret_key` when omitted. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker socket path |
 

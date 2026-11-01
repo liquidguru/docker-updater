@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.17.0] — 2026-11-02
+
+### Added
+- **Optional read-only `API_KEY`** — a dashboard or widget can now read `GET /api/status` with `Authorization: Bearer <key>` instead of holding the admin password, which can also start updates and rollbacks. The key works for that one endpoint only (not other endpoints, not other methods, and it creates no session), is ignored unless login is enabled, must be at least 16 characters, and changes nothing when unset. Suggested by @sabbath88, whose [Homepage widget](https://github.com/gethomepage/homepage/discussions/7305) counts containers from this endpoint (#33)
+
 ## [1.16.4] — 2026-11-01
 
 ### Fixed

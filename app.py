@@ -72,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.16.4"
+APP_VERSION          = "1.17.0"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -117,6 +117,19 @@ else:
     AUTH_USERNAME = _AUTH_USER_RAW
     AUTH_PASSWORD = _AUTH_PASS_RAW
     AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+
+# Optional read-only API key for dashboards and integrations. A request with
+# "Authorization: Bearer <key>" may read GET /api/status without a session, so
+# a widget need not hold the admin password. Only meaningful when login is
+# enabled (otherwise everything is open anyway); too-short keys are ignored.
+_API_KEY_MIN_LEN = 16
+_API_KEY_RAW = os.environ.get("API_KEY", "").strip()
+if _API_KEY_RAW and len(_API_KEY_RAW) < _API_KEY_MIN_LEN:
+    print(f"[auth] WARNING: API_KEY is shorter than {_API_KEY_MIN_LEN} characters; ignoring it.")
+    _API_KEY_RAW = ""
+API_KEY = _API_KEY_RAW if AUTH_ENABLED else ""
+if _API_KEY_RAW and not AUTH_ENABLED:
+    print("[auth] API_KEY has no effect without AUTH_USERNAME and AUTH_PASSWORD.")
 
 
 _state_lock    = threading.Lock()
@@ -2966,6 +2979,15 @@ def _theme_from_state() -> str:
     return theme
 
 
+def _api_key_allows(req) -> bool:
+    """True for a valid read-only API key on the one endpoint it covers."""
+    if not API_KEY or req.method != "GET" or req.path != "/api/status":
+        return False
+    header = req.headers.get("Authorization", "")
+    scheme, _, token = header.partition(" ")
+    return scheme.lower() == "bearer" and _const_eq(token.strip(), API_KEY)
+
+
 @app.before_request
 def _require_auth():
     if not AUTH_ENABLED:
@@ -2977,6 +2999,8 @@ def _require_auth():
     if path.startswith("/static/"):
         return None
     if session.get("authenticated"):
+        return None
+    if _api_key_allows(request):
         return None
     if path.startswith("/api/"):
         return jsonify({"error": "Unauthorized"}), 401
