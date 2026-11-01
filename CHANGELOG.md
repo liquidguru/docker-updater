@@ -2,6 +2,13 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.16.4] — 2026-11-01
+
+### Fixed
+- **Reclaiming images was easy to lose track of, and it offered images that could not be removed** — the list offered every untagged image, so "select all" on a host with rollback backups tried to delete images a backup still needed and Docker refused. The list now marks an image held by a container, saying which backup keeps it and until when (or that a running or stopped container uses it), greys it out so it cannot be selected, and counts it separately ("4 can be removed now · 8 held"); "select all" covers only what can really go. Once the backup expires or is deleted in the Backups tab, its image becomes removable.
+- **Leaving the Settings page blanked the list and lost the result** — the panel is rebuilt every time Settings is opened, and a finished job was discarded the first time it was read, so coming back mid-job showed nothing. The list is now restored, and the job is remembered on the server: while it runs the page shows its progress with a note that leaving is safe, and a finished job's result (what was freed, what was skipped and why) stays until you dismiss it or an hour passes, even across a page reload. A second reclaim on the same host while one is running is refused and the page shows the running one instead.
+- **A big image was reported as failed when Docker was only slow** — removal used Docker's default 60-second request limit, so a multi-GB image on a slow disk was shown as skipped with a cryptic `UnixHTTPConnectionPool` message although Docker went on to delete it. Removal now waits up to 15 minutes per request; if a request still times out, the image is checked again and counted as removed if it has gone, and otherwise reported as "Docker was still removing it — check again shortly". Skip reasons are translated (English and Chinese)
+
 ## [1.16.3] — 2026-10-23
 
 ### Fixed

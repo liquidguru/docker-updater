@@ -72,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.16.3"
+APP_VERSION          = "1.16.4"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -3477,12 +3477,17 @@ def api_settings_post():
     return jsonify({"ok": True, "next_check": _next_check_time()})
 
 
-def _client_for_host(host_id: str):
+def _client_for_host(host_id: str, timeout: int | None = None):
+    """A client for `host_id`. `timeout` is how long a single request to the
+    daemon may take; docker.from_env() gives up after 60 s, which is far too
+    short for removing a multi-GB image on a NAS."""
     if host_id == "local":
-        return docker.from_env()
+        return docker.from_env(timeout=timeout) if timeout else docker.from_env()
     host = next((h for h in load_hosts() if h["id"] == host_id), None)
     if not host:
         raise ValueError(f"Host '{host_id}' not found.")
+    if timeout:
+        return get_docker_client(host.get("url"), timeout=timeout)
     return get_docker_client(host.get("url"))
 
 
@@ -3499,6 +3504,43 @@ def _repo_name_from_image(img) -> str | None:
     return None
 
 
+def _rollbacks_for_host(host_id: str) -> dict:
+    """The rollback (backup) records kept for a host, keyed by container name."""
+    try:
+        if host_id == "local":
+            with _state_lock:
+                return dict(load_state().get("rollbacks") or {})
+        return dict(load_host_state(host_id).get("rollbacks") or {})
+    except Exception:
+        return {}
+
+
+def _holders_by_image(client, host_id: str) -> dict[str, list[dict]]:
+    """Which containers, in any state, keep each image alive.
+
+    Docker refuses to remove an image a container still uses, so listing such an
+    image as deletable only to have the delete skipped is misleading. Backups
+    kept for rollback are the usual holders (`<name>_old`): once the backup
+    expires or is removed, its image becomes reclaimable.
+    """
+    rollbacks = _rollbacks_for_host(host_id)
+    holders: dict[str, list[dict]] = {}
+    for c in client.containers.list(all=True):
+        attrs = c.attrs or {}
+        image_id = attrs.get("Image")
+        if not image_id:
+            continue
+        name = c.name or ""
+        record = rollbacks.get(name[:-4]) if name.endswith("_old") else None
+        holders.setdefault(image_id, []).append({
+            "name": name,
+            "state": (attrs.get("State") or {}).get("Status") or "unknown",
+            "backup": record is not None,
+            "expires_at": (record or {}).get("expires_at"),
+        })
+    return holders
+
+
 @app.route("/api/dangling-images", methods=["GET"])
 def api_dangling_images():
     """List dangling (untagged) images so the user can see and choose what to
@@ -3507,6 +3549,12 @@ def api_dangling_images():
     try:
         client = _client_for_host(host_id)
         images = client.images.list(filters={"dangling": True})
+        try:
+            holders = _holders_by_image(client, host_id)
+        except Exception as e:
+            # Better an unannotated list than no list.
+            print(f"[reclaim] could not work out which containers hold images: {e}")
+            holders = {}
         out = [{
             "id": img.id,
             "short_id": img.short_id.split(":")[-1][:12],
@@ -3514,6 +3562,7 @@ def api_dangling_images():
             "size": img.attrs.get("Size", 0),
             "size_human": _human_size(img.attrs.get("Size", 0)),
             "created": img.attrs.get("Created"),
+            "held_by": holders.get(img.id or "", []),
         } for img in images]
         out.sort(key=lambda x: x["size"], reverse=True)
         return jsonify({"ok": True, "images": out})
@@ -3526,9 +3575,19 @@ def api_dangling_images():
         return jsonify({"error": f"Docker unavailable: {e}"}), 500
 
 
-def _friendly_skip_reason(client, exc) -> str:
-    """Turn Docker's raw 'must be forced' conflict into a message that names
-    the actual blocking container, instead of a generic 'still in use'."""
+# A finished reclaim stays retrievable (and is shown again if the page was left
+# or reloaded) until it is dismissed or this long has passed.
+_PRUNE_KEEP_SECONDS = 3600
+# How long to wait for a daemon that timed out to finish removing an image.
+_PRUNE_SLOW_WAIT = 120
+# Per-request timeout for the removal client: deleting a multi-GB image on a NAS
+# can take minutes, and the default 60 s reported those as failures.
+_PRUNE_REQUEST_TIMEOUT = 900
+
+
+def _prune_skip(client, exc, rollbacks: dict | None = None) -> dict:
+    """Describe why Docker refused to remove an image, in a form the page can
+    translate: a `kind` plus the details, with an English `reason` as fallback."""
     explanation = getattr(exc, "explanation", None) or str(exc)
     if isinstance(explanation, bytes):
         explanation = explanation.decode(errors="ignore")
@@ -3539,34 +3598,98 @@ def _friendly_skip_reason(client, exc) -> str:
             name = client.containers.get(cid).name
         except Exception:
             name = cid[:12]
-        return f"still used by {state} container '{name}'"
+        backup = name.endswith("_old") and name[:-4] in (rollbacks or {})
+        return {"kind": "container", "state": state, "name": name, "backup": backup,
+                "reason": f"still used by {state} container '{name}'"}
     if "dependent child images" in explanation:
-        return "still has dependent images that reference it"
-    return explanation.split("(")[0].strip() or "in use"
+        return {"kind": "dependents",
+                "reason": "still has dependent images that reference it"}
+    return {"kind": "other", "reason": explanation.split("(")[0].strip() or "in use"}
 
 
-def _run_prune_job(job_id: str, client, ids: list) -> None:
+def _friendly_skip_reason(client, exc) -> str:
+    """Turn Docker's raw 'must be forced' conflict into a message that names
+    the actual blocking container, instead of a generic 'still in use'."""
+    return _prune_skip(client, exc)["reason"]
+
+
+def _removal_finished(client, image_id: str, wait: float | None = None,
+                      step: float = 3) -> bool:
+    """After a request timed out, did the daemon finish the removal anyway?
+    Polls for up to `wait` seconds (default `_PRUNE_SLOW_WAIT`)."""
+    deadline = time.monotonic() + (_PRUNE_SLOW_WAIT if wait is None else wait)
+    while True:
+        try:
+            client.images.get(image_id)
+        except docker.errors.ImageNotFound:
+            return True
+        except Exception:
+            pass  # daemon busy — keep waiting
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(step)
+
+
+def _prune_update(job_id: str, **fields) -> bool:
+    """Update a job's fields. False when the job no longer exists."""
+    with _prune_lock:
+        job = _prune_jobs.get(job_id)
+        if job is None:
+            return False
+        job.update(fields)
+        return True
+
+
+def _run_prune_job(job_id: str, client, ids: list, host_id: str = "local") -> None:
     removed, freed, skipped = 0, 0, []
-    for image_id in ids:
+    rollbacks = _rollbacks_for_host(host_id)
+    for n, image_id in enumerate(ids, start=1):
+        size = 0
         try:
             size = client.images.get(image_id).attrs.get("Size", 0)
+            if not _prune_update(job_id, current=image_id[:19],
+                                 current_size=_human_size(size)):
+                return  # job was cleared (e.g. app restarted) — stop quietly
             client.images.remove(image_id, force=False)
             removed += 1
             freed += size
         except docker.errors.ImageNotFound:
             pass  # already gone — fine
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            # The daemon was slow, not necessarily unwilling: removal often
+            # completes server-side after the request gives up.
+            if _removal_finished(client, image_id):
+                removed += 1
+                freed += size
+            else:
+                skipped.append({
+                    "id": image_id[:19], "kind": "slow",
+                    "reason": "Docker is still removing this image — check again shortly",
+                })
         except Exception as e:
-            skipped.append({"id": image_id[:19], "reason": _friendly_skip_reason(client, e)})
-        with _prune_lock:
-            job = _prune_jobs.get(job_id)
-            if job is None:
-                return  # job was cleared (e.g. app restarted) — stop quietly
-            job["done"] = removed + len(skipped)
-    with _prune_lock:
-        job = _prune_jobs.get(job_id)
-        if job is not None:
-            job.update(status="done", count=removed, freed=_human_size(freed),
-                      skipped=skipped)
+            skipped.append({"id": image_id[:19], **_prune_skip(client, e, rollbacks)})
+        if not _prune_update(job_id, done=n):
+            return
+    _prune_update(job_id, status="done", count=removed, freed=_human_size(freed),
+                  skipped=skipped, current=None, current_size=None,
+                  finished_at=datetime.datetime.utcnow().isoformat() + "Z",
+                  finished_ts=time.time())
+
+
+def _prune_expire_locked() -> None:
+    """Drop finished jobs that were dismissed or are past their keep time."""
+    now = time.time()
+    for job_id in [j for j, job in _prune_jobs.items()
+                   if job.get("status") == "done"
+                   and (job.get("dismissed")
+                        or now - job.get("finished_ts", now) > _PRUNE_KEEP_SECONDS)]:
+        _prune_jobs.pop(job_id, None)
+
+
+def _prune_public(job_id: str, job: dict) -> dict:
+    out = {k: v for k, v in job.items() if k not in ("finished_ts", "dismissed")}
+    out["job_id"] = job_id
+    return out
 
 
 @app.route("/api/prune-images", methods=["POST"])
@@ -3579,35 +3702,75 @@ def api_prune_images():
     Removes each image individually (not a blanket prune) so one still-in-use
     image (e.g. referenced by a kept backup) is skipped with a reason rather
     than blocking the rest — and, as a bonus, this sidesteps Docker's global
-    prune lock, so it can't collide with the NAS's own background cleanup."""
+    prune lock, so it can't collide with the NAS's own background cleanup.
+
+    The job outlives the page: it keeps running if the user leaves, and a
+    finished job stays retrievable (`/api/prune-job`) until dismissed."""
     data = request.get_json(silent=True) or {}
     host_id = data.get("host_id", "local")
     ids = data.get("ids") or []
     if not ids:
         return jsonify({"error": "No images selected."}), 400
     try:
-        client = _client_for_host(host_id)
+        client = _client_for_host(host_id, timeout=_PRUNE_REQUEST_TIMEOUT)
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
         return jsonify({"error": f"Docker unavailable: {e}"}), 500
     job_id = secrets.token_hex(8)
     with _prune_lock:
-        _prune_jobs[job_id] = {"status": "running", "total": len(ids), "done": 0}
-    threading.Thread(target=_run_prune_job, args=(job_id, client, ids), daemon=True).start()
+        _prune_expire_locked()
+        running = next((j for j, job in _prune_jobs.items()
+                        if job.get("host_id") == host_id and job.get("status") == "running"), None)
+        if running is not None:
+            return jsonify({"error": "A reclaim is already running on this host.",
+                            "job_id": running}), 409
+        _prune_jobs[job_id] = {
+            "status": "running", "total": len(ids), "done": 0, "host_id": host_id,
+            "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "current": None, "current_size": None,
+        }
+    threading.Thread(target=_run_prune_job, args=(job_id, client, ids, host_id),
+                     daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id})
 
 
 @app.route("/api/prune-images/<job_id>", methods=["GET"])
 def api_prune_images_status(job_id):
     with _prune_lock:
+        _prune_expire_locked()
         job = _prune_jobs.get(job_id)
         if job is None:
             return jsonify({"error": "Job not found."}), 404
-        result = dict(job)
-        if result["status"] == "done":
-            _prune_jobs.pop(job_id, None)  # one-shot: UI has already polled it
-    return jsonify(result)
+        return jsonify(_prune_public(job_id, job))
+
+
+@app.route("/api/prune-job", methods=["GET"])
+def api_prune_job_latest():
+    """The reclaim job a returning page should show for a host: one still
+    running, else the most recent finished one nobody has dismissed."""
+    host_id = request.args.get("host", "local")
+    with _prune_lock:
+        _prune_expire_locked()
+        mine = [(j, job) for j, job in _prune_jobs.items() if job.get("host_id") == host_id]
+        running = [x for x in mine if x[1].get("status") == "running"]
+        pool = running or mine
+        if not pool:
+            return jsonify({"job": None})
+        job_id, job = max(pool, key=lambda x: x[1].get("started_at", ""))
+        return jsonify({"job": _prune_public(job_id, job)})
+
+
+@app.route("/api/prune-images/<job_id>/dismiss", methods=["POST"])
+def api_prune_images_dismiss(job_id):
+    with _prune_lock:
+        job = _prune_jobs.get(job_id)
+        if job is None:
+            return jsonify({"ok": True})  # already gone — nothing to dismiss
+        if job.get("status") == "running":
+            return jsonify({"error": "That reclaim is still running."}), 409
+        _prune_jobs.pop(job_id, None)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/defer/<name>", methods=["POST"])

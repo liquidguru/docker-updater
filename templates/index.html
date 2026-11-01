@@ -729,6 +729,7 @@
             <span class="setting-note">${t('settings.prune_hint')}</span>
           </div>
           <div id="prune-list" style="width:100%"></div>
+          <div id="prune-error" style="margin-top:8px;font-size:13px;color:var(--red)"></div>
           <div id="prune-result" style="margin-top:8px;font-size:13px"></div>
         </div>
       </div>
@@ -746,9 +747,16 @@
       </div>`;
     applyScheduleVisibility();
     renderNextCheck(_settings.next_check);
+    // The panel is rebuilt each time Settings is opened: put back the list and
+    // any reclaim that is running or has finished, rather than showing a blank.
+    if (_pruneLoaded) renderDanglingList();
+    resumePruneView();
   }
 
   let _danglingImages = [];
+  let _pruneLoaded = false;   // the list has been fetched at least once since the page loaded
+  let _pruneJob = null;       // the reclaim job the server reports for _pruneHost
+  let _prunePolling = null;   // id of the job being polled, so only one poller runs
   // Which host the reclaimable list is showing. Images are per-daemon, so this
   // has to be explicit — deleting from the wrong host would be silent and wrong.
   let _pruneHost = 'local';
@@ -756,60 +764,164 @@
   function onPruneHostChange(hostId) {
     _pruneHost = hostId;
     _danglingImages = [];
+    _pruneLoaded = false;
+    _pruneJob = null;
     document.getElementById('prune-list').innerHTML = '';
     document.getElementById('prune-result').textContent = '';
     loadDanglingImages();
+    resumePruneView();
+  }
+
+  function pruneNote(text, color) {
+    const el = document.getElementById('prune-error');
+    if (!el) return;
+    el.style.color = color || 'var(--red)';
+    el.textContent = text;
   }
 
   async function loadDanglingImages() {
-    const btn  = document.getElementById('prune-btn');
-    const list = document.getElementById('prune-list');
-    const out  = document.getElementById('prune-result');
-    out.textContent = '';
+    const btn = document.getElementById('prune-btn');
+    if (!btn) return;   // the Settings panel isn't drawn
+    pruneNote('');
     btn.disabled = true;
     btn.textContent = t('prune.loading');
     try {
       const r = await fetch(`/api/dangling-images?host=${encodeURIComponent(_pruneHost)}`);
       const d = await r.json();
-      if (!r.ok) { out.style.color = 'var(--red)'; out.textContent = `⚠️ ${d.error}`; return; }
+      if (!r.ok) { pruneNote(`⚠️ ${d.error}`); return; }
       _danglingImages = d.images || [];
+      _pruneLoaded = true;
       renderDanglingList();
     } catch (e) {
-      out.style.color = 'var(--red)'; out.textContent = t('prune.load_err');
+      pruneNote(t('prune.load_err'));
     } finally {
-      btn.disabled = false;
-      btn.textContent = t('btn.show_reclaimable');
+      const b = document.getElementById('prune-btn');
+      if (b) { b.disabled = false; b.textContent = t('btn.show_reclaimable'); }
     }
   }
 
-  function renderDanglingList() {
-    const list = document.getElementById('prune-list');
-    if (!_danglingImages.length) {
-      list.innerHTML = `<div class="setting-note" style="margin-top:8px">${t('prune.none')}</div>`;
-      return;
+  // <prune-ui>
+  function pruneSum(images) { return images.reduce((s, i) => s + (Number(i.size) || 0), 0); }
+  function pruneIsHeld(img) { return !!(img.held_by && img.held_by.length); }
+
+  function pruneWhen(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'});
+  }
+
+  // Why Docker will refuse to delete this image: a container, usually a rollback
+  // backup, still uses it.
+  function pruneHeldText(img) {
+    const h = (img.held_by || [])[0];
+    if (!h) return '';
+    let text;
+    if (h.backup) {
+      const when = h.expires_at ? pruneWhen(h.expires_at) : '';
+      text = when ? t('prune.held_backup_until', {name: h.name, when}) : t('prune.held_backup', {name: h.name});
+    } else if (h.state === 'running') {
+      text = t('prune.held_running', {name: h.name});
+    } else {
+      text = t('prune.held_stopped', {name: h.name});
     }
-    const rowCols = 'grid-template-columns:20px 100px minmax(0,1fr) 72px 64px';
-    const rows = _danglingImages.map(img => `
-      <label style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;border-bottom:1px solid var(--border);font-size:13px">
-        <input type="checkbox" class="prune-check" value="${esc(img.id)}" data-size="${img.size}" onchange="updatePruneTotal()">
+    const more = img.held_by.length - 1;
+    return more > 0 ? `${text} ${t('prune.held_more', {n: more})}` : text;
+  }
+
+  function pruneRowHtml(img, rowCols) {
+    const held = pruneIsHeld(img);
+    const box = held
+      ? `<input type="checkbox" disabled title="${esc(pruneHeldText(img))}">`
+      : `<input type="checkbox" class="prune-check" value="${esc(img.id)}" data-size="${img.size}" onchange="updatePruneTotal()">`;
+    const repo = img.repo
+      ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(img.repo)}">${esc(img.repo)}</span>`
+      : `<span class="setting-note">${t('prune.unknown_image')}</span>`;
+    return `
+      <label class="prune-row${held ? ' prune-held' : ''}" style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;border-bottom:1px solid var(--border);font-size:13px${held ? ';opacity:.75' : ''}">
+        ${box}
         <code style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(img.short_id)}</code>
-        ${img.repo ? `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(img.repo)}">${esc(img.repo)}</span>` : `<span class="setting-note">${t('prune.unknown_image')}</span>`}
+        ${repo}
         <span style="text-align:right">${esc(img.size_human)}</span>
         <span class="setting-note" style="text-align:right">${esc(timeAgo(img.created))}</span>
-      </label>`).join('');
-    list.innerHTML = `
-      <div style="margin-top:10px;max-height:260px;overflow-y:auto;overflow-x:hidden">
+        ${held ? `<span class="setting-note" style="grid-column:2 / -1">${esc(pruneHeldText(img))}</span>` : ''}
+      </label>`;
+  }
+
+  // Images nothing holds come first and are the only ones that can be selected;
+  // held ones are listed so nothing looks missing, but never offered for deletion.
+  function pruneListHtml(images) {
+    if (!images.length) return `<div class="setting-note" style="margin-top:8px">${t('prune.none')}</div>`;
+    const free = images.filter(i => !pruneIsHeld(i));
+    const held = images.filter(pruneIsHeld);
+    const rowCols = 'grid-template-columns:20px 100px minmax(0,1fr) 72px 64px';
+    const rows = free.concat(held).map(img => pruneRowHtml(img, rowCols)).join('');
+    let summary = '';
+    if (held.length && !free.length) {
+      summary = t('prune.nothing_now', {n: held.length, size: _human_size_js(pruneSum(held))});
+    } else if (held.length) {
+      summary = t('prune.summary', {n: free.length, size: _human_size_js(pruneSum(free)),
+                                    held: held.length, heldsize: _human_size_js(pruneSum(held))});
+    }
+    const header = free.length ? `
         <label style="display:grid;${rowCols};align-items:center;gap:10px;padding:6px 4px 6px 0;font-size:13px;font-weight:600">
           <input type="checkbox" id="prune-select-all" onchange="toggleAllPrune(this.checked)">
-          <span style="grid-column:2 / span 3">${t(_danglingImages.length === 1 ? 'prune.select_all_count_one' : 'prune.select_all_count', {n: _danglingImages.length})}</span>
-          <span style="text-align:right">${_human_size_js(_danglingImages.reduce((s,i)=>s+i.size,0))}</span>
-        </label>
-        ${rows}
-      </div>
+          <span style="grid-column:2 / span 3">${t(free.length === 1 ? 'prune.select_all_count_one' : 'prune.select_all_count', {n: free.length})}</span>
+          <span style="text-align:right">${_human_size_js(pruneSum(free))}</span>
+        </label>` : '';
+    const action = free.length ? `
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
         <button class="btn-danger btn-sm" id="prune-delete-btn" onclick="deleteSelectedImages()" disabled>${t('btn.delete_selected_images')}</button>
         <span id="prune-selected-total" class="setting-note"></span>
-      </div>`;
+      </div>` : '';
+    return `
+      ${summary ? `<div class="setting-note" style="margin-top:10px">${esc(summary)}</div>` : ''}
+      <div style="margin-top:10px;max-height:260px;overflow-y:auto;overflow-x:hidden">
+        ${header}
+        ${rows}
+      </div>${action}`;
+  }
+
+  function pruneSkipText(skip) {
+    if (skip.kind === 'container') {
+      if (skip.backup) return t('prune.skip_backup', {name: skip.name});
+      return t(skip.state === 'running' ? 'prune.skip_running' : 'prune.skip_stopped', {name: skip.name});
+    }
+    if (skip.kind === 'dependents') return t('prune.skip_dependents');
+    if (skip.kind === 'slow') return t('prune.skip_slow');
+    return skip.reason || '';
+  }
+
+  // What to show for a reclaim job: progress while it runs (with the reassurance
+  // that leaving the page is fine), the outcome once it has finished.
+  function pruneJobView(job) {
+    if (job.status === 'lost') return {color: 'var(--red)', html: esc(t('prune.job_lost'))};
+    if (job.status === 'error') return {color: 'var(--red)', html: '⚠️ ' + esc(job.error || t('prune.progress_err'))};
+    if (job.status === 'running') {
+      let html = esc(t('prune.working', {done: job.done || 0, total: job.total || 0}));
+      if (job.current_size) html += ' ' + esc(t('prune.working_current', {size: job.current_size}));
+      html += `<div class="setting-note" style="margin-top:4px">${esc(t('prune.running_note'))}</div>`;
+      return {color: 'var(--muted)', html};
+    }
+    const removed = job.count || 0;
+    let html = removed > 0 ? esc(t('prune.freed', {freed: job.freed, count: removed})) : esc(t('prune.freed_none'));
+    if (job.finished_at) {
+      html += ` <span class="setting-note">${esc(t('prune.finished_ago', {ago: timeAgo(job.finished_at)}))}</span>`;
+    }
+    const skipped = job.skipped || [];
+    if (skipped.length) {
+      const items = skipped.map(s => `<li><code>${esc(s.id)}</code> — ${esc(pruneSkipText(s))}</li>`).join('');
+      html += `<div style="color:var(--muted);margin-top:6px">${esc(t('prune.skipped', {n: skipped.length}))}</div>
+        <ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">${items}</ul>`;
+    }
+    html += `<div style="margin-top:8px"><button class="btn-secondary btn-sm" onclick="dismissPruneJob()">${esc(t('prune.dismiss'))}</button></div>`;
+    return {color: removed > 0 ? 'var(--green)' : 'var(--muted)', html};
+  }
+  // </prune-ui>
+
+  function renderDanglingList() {
+    const list = document.getElementById('prune-list');
+    if (!list) return;
+    list.innerHTML = pruneListHtml(_danglingImages);
+    updatePruneTotal();
   }
 
   function toggleAllPrune(checked) {
@@ -817,12 +929,61 @@
     updatePruneTotal();
   }
 
+  function pruneRunning() {
+    return !!(_pruneJob && _pruneJob.status === 'running' && _pruneJob.host_id === _pruneHost);
+  }
+
   function updatePruneTotal() {
+    const del = document.getElementById('prune-delete-btn');
+    if (!del) return;   // nothing in the list can be removed
     const checked = [...document.querySelectorAll('.prune-check:checked')];
     const total = checked.reduce((s, cb) => s + Number(cb.dataset.size), 0);
-    document.getElementById('prune-delete-btn').disabled = checked.length === 0;
+    del.disabled = checked.length === 0 || pruneRunning();
     document.getElementById('prune-selected-total').textContent =
       checked.length ? t('prune.selected_count', {n: checked.length, size: _human_size_js(total)}) : '';
+  }
+
+  // Draw the current job into the panel. Reads the elements afresh each time:
+  // the panel is rebuilt whenever Settings is opened, and the poller outlives it.
+  function paintPruneJob() {
+    const out = document.getElementById('prune-result');
+    if (!out) return;
+    const job = _pruneJob && (_pruneJob.host_id === undefined || _pruneJob.host_id === _pruneHost) ? _pruneJob : null;
+    if (job) {
+      const view = pruneJobView(job);
+      out.style.color = view.color;
+      out.innerHTML = view.html;
+    } else {
+      out.textContent = '';
+    }
+    const btn = document.getElementById('prune-delete-btn');
+    if (btn) btn.textContent = pruneRunning() ? t('prune.working', {done: job.done || 0, total: job.total || 0}) : t('btn.delete_selected_images');
+    updatePruneTotal();
+  }
+
+  // Called whenever the Settings panel is drawn: show whatever reclaim is
+  // running or has just finished, even if this page didn't start it.
+  async function resumePruneView() {
+    if (!document.getElementById('prune-result')) return;
+    paintPruneJob();
+    let d;
+    try {
+      const r = await fetch(`/api/prune-job?host=${encodeURIComponent(_pruneHost)}`);
+      d = await r.json();
+    } catch (e) { return; }
+    if (!d || !d.job) return;
+    _pruneJob = d.job;
+    paintPruneJob();
+    if (d.job.status === 'running') pollPruneJob(d.job.job_id);
+  }
+
+  async function dismissPruneJob() {
+    const id = _pruneJob && _pruneJob.job_id;
+    _pruneJob = null;
+    paintPruneJob();
+    if (id) {
+      try { await fetch(`/api/prune-images/${id}/dismiss`, {method: 'POST'}); } catch (e) {}
+    }
   }
 
   function _human_size_js(n) {
@@ -946,68 +1107,70 @@
       ? t('prune.confirm_host', {n: ids.length, host: hostName})
       : t('prune.confirm', {n: ids.length});
     if (!(await showConfirm(msg))) return;
-    const btn = document.getElementById('prune-delete-btn');
-    const out = document.getElementById('prune-result');
-    btn.disabled = true;
-    btn.textContent = t('prune.working', {done: 0, total: ids.length});
-    out.style.color = 'var(--muted)';
-    out.textContent = t('prune.working', {done: 0, total: ids.length});
+    pruneNote('');
+    _pruneJob = {status: 'running', total: ids.length, done: 0, host_id: _pruneHost};
+    paintPruneJob();
     try {
       const r = await fetch('/api/prune-images', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ ids, host_id: _pruneHost }) });
       const d = await r.json();
-      if (!r.ok || !d.job_id) {
-        out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + (d.error || t('prune.start_err'));
+      if (r.status === 409 && d.job_id) {
+        // Another tab (or an earlier click) already has a reclaim going here.
+        pruneNote(t('prune.already_running'), 'var(--muted)');
+        await pollPruneJob(d.job_id);
         return;
       }
-      await pollPruneJob(d.job_id, out, btn);
+      if (!r.ok || !d.job_id) {
+        _pruneJob = null;
+        paintPruneJob();
+        pruneNote('⚠️ ' + (d.error || t('prune.start_err')));
+        return;
+      }
+      await pollPruneJob(d.job_id);
     } catch (e) {
-      out.style.color = 'var(--red)'; out.textContent = '⚠️ ' + t('prune.load_err');
-    } finally {
-      btn.textContent = t('btn.delete_selected_images');
-      btn.disabled = false;
-      await loadDanglingImages();
+      _pruneJob = null;
+      paintPruneJob();
+      pruneNote('⚠️ ' + t('prune.load_err'));
     }
   }
 
-  async function pollPruneJob(jobId, out, btn) {
-    // Runs server-side in a background thread ? polled rather than awaited in
-    // one request, since a large "select all" batch of multi-GB images can
-    // easily outlast a reverse proxy's read timeout.
-    while (true) {
-      await new Promise(res => setTimeout(res, 1500));
-      let r, d;
-      try {
-        r = await fetch(`/api/prune-images/${jobId}`);
-        d = await r.json();
-      } catch (e) {
-        continue; // transient network hiccup while polling ? keep trying
+  // The job runs on the server in a background thread and is polled, not
+  // awaited: a large "select all" of multi-GB images can outlast any proxy
+  // timeout, and it keeps going if the page is left. One poller at a time; it
+  // repaints from `_pruneJob`, so a rebuilt panel picks up where it left off.
+  async function pollPruneJob(jobId) {
+    if (_prunePolling === jobId) return;
+    _prunePolling = jobId;
+    try {
+      while (true) {
+        let r, d;
+        try {
+          r = await fetch(`/api/prune-images/${jobId}`);
+          d = await r.json();
+        } catch (e) {
+          await new Promise(res => setTimeout(res, 1500));
+          continue; // transient network hiccup while polling — keep trying
+        }
+        if (r.status === 404) {
+          _pruneJob = {status: 'lost'};
+          paintPruneJob();
+          return;
+        }
+        if (!r.ok) {
+          _pruneJob = {status: 'error', error: d.error};
+          paintPruneJob();
+          return;
+        }
+        _pruneJob = d;
+        paintPruneJob();
+        if (d.status !== 'running') {
+          await loadDanglingImages();
+          return;
+        }
+        await new Promise(res => setTimeout(res, 1500));
       }
-      if (r.status === 404) {
-        out.style.color = 'var(--red)';
-        out.textContent = t('prune.job_lost');
-        return;
-      }
-      if (!r.ok) {
-        out.style.color = 'var(--red)';
-        out.textContent = '⚠️ ' + (d.error || t('prune.progress_err'));
-        return;
-      }
-      if (d.status === 'running') {
-        out.style.color = 'var(--muted)';
-        out.textContent = t('prune.working', {done: d.done, total: d.total});
-        if (btn) btn.textContent = t('prune.working', {done: d.done, total: d.total});
-        continue;
-      }
-      out.style.color = 'var(--green)';
-      let html = t('prune.freed', {freed: d.freed, count: d.count});
-      if (d.skipped && d.skipped.length) {
-        const items = d.skipped.map(s => `<li><code>${esc(s.id)}</code> ? ${esc(s.reason)}</li>`).join('');
-        html += `<div style="color:var(--muted);margin-top:6px">${t('prune.skipped', {n: d.skipped.length})}</div>
-          <ul style="margin:4px 0 0 18px;padding:0;color:var(--muted)">${items}</ul>`;
-      }
-      out.innerHTML = html;
-      return;
+    } finally {
+      _prunePolling = null;
     }
   }
 
