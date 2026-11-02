@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/liquidguru/docker-updater/security/advisories/new
+    about: Please report security problems privately here, not as a public issue.

@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation or problem first, before the solution. What gets in your way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see
+      description: How you imagine it working. A rough sketch is fine.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do now or have considered
+      description: Workarounds, other tools, or other ways to solve it.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Is it opt-in?
+      description: Changes to defaults affect everyone, so new behaviour usually ships switched off.
+      options:
+        - Fine as an opt-in setting
+        - Should be the default
+        - Not sure
+  - type: input
+    id: version
+    attributes:
+      label: docker-updater version
+      description: Shown in the dashboard header.

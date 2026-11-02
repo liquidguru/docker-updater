@@ -1,0 +1,76 @@
+name: Bug report
+description: Something doesn't work, or an update is shown or missed wrongly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The answers below are what I'd otherwise have to ask for, so they save a round of questions.
+        For a security problem, please don't use this form: see [SECURITY.md](https://github.com/liquidguru/docker-updater/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: docker-updater version
+      description: Shown in the dashboard header, for example v1.17.0.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How you run it
+      options:
+        - Docker Compose
+        - docker run
+        - Synology / QNAP container UI
+        - Unraid
+        - Portainer
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Which host is affected
+      options:
+        - The local host (Docker socket)
+        - A remote host over SSH
+        - A remote host over TCP
+        - Not host-specific
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead. Screenshots are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: image-info
+    attributes:
+      label: Image details (for wrong or missing update results)
+      description: |
+        If a container shows an update that isn't real, or none that is, please paste the output of this for that image (swap in its name):
+        `docker image inspect IMAGE:TAG --format '{{json .RepoDigests}}'`
+      render: shell
+  - type: textarea
+    id: docker-info
+    attributes:
+      label: Docker version and storage driver
+      description: |
+        Output of `docker version` and `docker info | grep -i -E "storage driver|driver-type"`
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        From `docker logs docker-updater`. For update-check problems, lines starting `[checker:local]` or `[registry]` for the container help most.
+      render: shell
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed passwords, tokens and notification URLs (`NOTIFY_URL`, `AUTH_PASSWORD`, `API_KEY`, registry tokens) from anything I pasted
+          required: true
