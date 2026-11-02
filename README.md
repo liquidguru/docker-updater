@@ -576,7 +576,7 @@ docker rm watchtower
 
 ## License
 
-MIT
+[MIT](LICENSE). To report a security problem, see [SECURITY.md](SECURITY.md).
 
 ## Acknowledgments
 

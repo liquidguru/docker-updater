@@ -573,7 +573,7 @@ docker rm watchtower
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)。如需报告安全问题，请参阅 [SECURITY.md](SECURITY.md)。
 
 ## 致谢
 
