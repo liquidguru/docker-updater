@@ -151,6 +151,12 @@ Then open `http://<your-host>:9292`. A green banner will appear showing your aut
 
 ---
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/Docker%20Updater/)
+
+---
+
 ## docker-compose.yml
 
 ```yaml
