@@ -2,10 +2,15 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.17.2] — 2026-11-17
+
+### Security
+- **`paramiko` updated 3.4.0 → 5.0.0** (CVE-2026-44405, low: SHA-1 for RSA signatures). docker-updater never used it for a connection: `ssh://` hosts are opened through the system `ssh` program (`use_ssh_client=True`), and `paramiko` is installed only because Docker's Python library imports it before it will accept an `ssh://` host. Updated anyway so image scanners report nothing. Checked end to end against a real SSH host before release.
+
 ## [1.17.1] — 2026-11-17
 
 ### Security
-- **Dependencies updated for published advisories** (GitHub Dependabot): `requests` 2.31.0 → 2.33.0 (CVE-2024-35195, CVE-2024-47081, CVE-2026-25645), `flask` 3.0.3 → 3.1.3 (CVE-2026-27205), `apprise` 1.9.3 → 1.11.0 (CVE-2026-59180). None was a practical risk in how docker-updater uses them (it never disables certificate checks, has no `.netrc`, and doesn't use the affected zip helper), but they are patched now. `paramiko` (CVE-2026-44405, low) is left at 3.4.0: the fix is a major-version jump and the app does not call it directly. No behaviour changes.
+- **Dependencies updated for published advisories** (GitHub Dependabot): `requests` 2.31.0 → 2.33.0 (CVE-2024-35195, CVE-2024-47081, CVE-2026-25645), `flask` 3.0.3 → 3.1.3 (CVE-2026-27205), `apprise` 1.9.3 → 1.11.0 (CVE-2026-59180). None was a practical risk in how docker-updater uses them (it never disables certificate checks, has no `.netrc`, and doesn't use the affected zip helper), but they are patched now. `paramiko` followed in 1.17.2. No behaviour changes.
 
 ## [1.17.0] — 2026-11-02
 
