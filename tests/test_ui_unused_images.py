@@ -193,6 +193,49 @@ class UnusedImagesUiTests(unittest.TestCase):
     def test_the_off_switch_defaults_off_in_the_pages_own_settings(self):
         self.assertIn("check_unused_images: false", INDEX)
 
+    def test_no_digest_toggle_saves_both_modes_and_refreshes_status(self):
+        self.assertIn('id="check-without-digest"', INDEX)
+        self.assertIn("check_images_without_digest: false", INDEX)
+        script = """
+let _settings = {check_images_without_digest: false};
+const elements = {
+  'backup-enabled': {checked: false}, 'backup-hours': {value: '24'},
+  'backup-options': {style: {}}, 'check-without-digest': {checked: false}
+};
+const document = {getElementById: id => elements[id]};
+const payloads = [];
+let refreshes = 0;
+const fetch = async (_url, options) => {
+  payloads.push(JSON.parse(options.body));
+  return {ok: true, json: async () => ({})};
+};
+const collectSchedule = () => null;
+const renderNextCheck = () => {};
+const fetchStatus = () => { refreshes++; };
+""" + _extract(r"  async function saveSettings\(\) \{.*?\n  \}\n") + """
+(async () => {
+  for (const enabled of [false, true, false]) {
+    elements['check-without-digest'].checked = enabled;
+    await saveSettings();
+  }
+  console.log(JSON.stringify({payloads, refreshes, settings: _settings}));
+})().catch(err => { console.error(err); process.exitCode = 1; });
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(script)
+            path = f.name
+        try:
+            result = subprocess.run(["node", path], capture_output=True, text=True,
+                                    encoding="utf-8", timeout=30)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual([p["check_images_without_digest"] for p in data["payloads"]],
+                         [False, True, False])
+        self.assertEqual(data["refreshes"], 2)
+        self.assertIs(data["settings"]["check_images_without_digest"], False)
+
 
 if __name__ == "__main__":
     unittest.main()

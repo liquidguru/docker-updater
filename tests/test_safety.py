@@ -849,31 +849,67 @@ class StaleContainerDetectionTests(SafetyTestBase):
         mod, c = self._container([f"amir20/dozzle@{old}"])
         self.assertEqual(mod.get_local_digest(c, "amir20/dozzle:latest"), old)
 
-    def test_images_without_repo_digests_are_checked_by_image_id(self):
-        for tags in (["amir20/dozzle:latest"], []):
-            for remote in ("sha256:" + "f" * 64, "sha256:new", None):
-                with self.subTest(tags=tags, remote=remote):
-                    mod, c = self._container([])
-                    c.image.attrs["RepoTags"] = tags
-                    client = mock.Mock()
-                    client.containers.list.return_value = [c]
-                    with mock.patch.object(mod, "get_remote_image_id", return_value=remote) as lookup, \
-                         mock.patch.object(mod, "get_remote_digest") as digest, \
-                         mock.patch.object(mod, "_collect_local_diff_ids", return_value=set()), \
-                         mock.patch.object(mod, "get_remote_download_analysis", return_value=None):
-                        found = mod._scan_host(client, "local")
-                    lookup.assert_called_once_with(
-                        "amir20/dozzle:latest", {"os": "linux", "architecture": "amd64", "variant": None})
-                    digest.assert_not_called()
-                    client.images.pull.assert_not_called()
-                    client.api.pull.assert_not_called()
-                    if remote is None:
-                        self.assertNotIn(c.name, found)
-                    else:
-                        self.assertEqual(found[c.name]["has_update"],
-                                         remote != c.image.attrs["Id"])
+    def test_uninspectable_image_is_not_treated_as_locally_built(self):
+        class C:
+            @property
+            def image(self):
+                raise RuntimeError("no such image")
 
-    def test_imported_image_is_visible_in_dashboard_before_checking(self):
+        self.assertFalse(self.mod.is_locally_built(C()))
+
+    def test_locally_built_image_is_still_skipped(self):
+        mod, c = self._container([])
+        c.image.attrs["RepoTags"] = ["myapp:latest"]
+        self.assertTrue(mod.is_locally_built(c))
+        client = mock.Mock()
+        client.containers.list.return_value = [c]
+        with mock.patch.object(mod, "load_state", return_value={}), \
+             mock.patch.object(mod, "CHECK_IMAGES_WITHOUT_DIGEST", False), \
+             mock.patch.object(mod, "get_remote_image_id") as lookup, \
+             mock.patch.object(mod, "get_remote_digest") as digest:
+            self.assertEqual(mod._scan_host(client, "local"), {})
+        lookup.assert_not_called()
+        digest.assert_not_called()
+
+    def test_orphaned_pull_is_not_mistaken_for_a_local_build(self):
+        mod, c = self._container([])
+        c.image.attrs["RepoTags"] = []
+        self.assertFalse(mod.is_locally_built(c))
+
+    def test_images_without_repo_digests_are_checked_by_image_id(self):
+        cases = [(enabled, tags, remote)
+                 for enabled in (False, True)
+                 for tags in (["amir20/dozzle:latest"], [])
+                 for remote in ("sha256:" + "f" * 64, "sha256:new", None)]
+        for enabled, tags, remote in cases:
+            with self.subTest(enabled=enabled, tags=tags, remote=remote):
+                mod, c = self._container([])
+                c.image.attrs["RepoTags"] = tags
+                client = mock.Mock()
+                client.containers.list.return_value = [c]
+                with mock.patch.object(mod, "load_state",
+                                       return_value={"check_images_without_digest": enabled}), \
+                     mock.patch.object(mod, "get_remote_image_id", return_value=remote) as lookup, \
+                     mock.patch.object(mod, "get_remote_digest") as digest, \
+                     mock.patch.object(mod, "_collect_local_diff_ids", return_value=set()), \
+                     mock.patch.object(mod, "get_remote_download_analysis", return_value=None):
+                    found = mod._scan_host(client, "local")
+                client.images.pull.assert_not_called()
+                client.api.pull.assert_not_called()
+                digest.assert_not_called()
+                if tags and not enabled:
+                    self.assertEqual(found, {})
+                    lookup.assert_not_called()
+                    continue
+                lookup.assert_called_once_with(
+                    "amir20/dozzle:latest", {"os": "linux", "architecture": "amd64", "variant": None})
+                if remote is None:
+                    self.assertNotIn(c.name, found)
+                else:
+                    self.assertEqual(found[c.name]["has_update"],
+                                     remote != c.image.attrs["Id"])
+
+    def test_imported_image_dashboard_visibility_follows_setting(self):
         mod, c = self._container([])
         self.state["deferred"] = {}
         c.image.attrs["RepoTags"] = ["amir20/dozzle:latest"]
@@ -885,11 +921,14 @@ class StaleContainerDetectionTests(SafetyTestBase):
              mock.patch.object(mod, "load_hosts", return_value=[]), \
              mock.patch.object(mod, "get_notify_info", return_value=None), \
              mock.patch.object(mod, "sweep_local_backups"):
-            response = mod.app.test_client().get("/api/status")
-        self.assertEqual(response.status_code, 200, response.get_json())
-        rows = response.get_json()["containers"]
-        self.assertEqual([(row["name"], row["status"]) for row in rows],
-                         [("dozzle", "unknown")])
+            for enabled in (False, True, False):
+                with self.subTest(enabled=enabled):
+                    self.state["check_images_without_digest"] = enabled
+                    response = mod.app.test_client().get("/api/status")
+                    self.assertEqual(response.status_code, 200, response.get_json())
+                    rows = response.get_json()["containers"]
+                    self.assertEqual([(row["name"], row["status"]) for row in rows],
+                                     [("dozzle", "unknown")] if enabled else [])
 
 
 class ImageReferenceParsingTests(SafetyTestBase):

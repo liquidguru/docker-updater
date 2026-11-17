@@ -441,7 +441,7 @@
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false, check_unused_images: false };
+  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false, check_unused_images: false, check_images_without_digest: false };
 
   async function loadSettings() {
     try {
@@ -502,14 +502,18 @@
     const notifyNewOnly  = document.getElementById('notify-new-only')?.checked || false;
     const checkUnused    = document.getElementById('check-unused')?.checked || false;
     const unusedChanged  = checkUnused !== !!_settings.check_unused_images;
+    const checkWithoutDigest = document.getElementById('check-without-digest')?.checked || false;
+    const withoutDigestChanged = checkWithoutDigest !== !!_settings.check_images_without_digest;
     const schedule = collectSchedule();
     _settings = { ..._settings, backup_enabled: enabled, backup_hours: hours,
                   restart_stack: restartStack, cleanup_images: cleanupImages,
-                  notify_new_only: notifyNewOnly, check_unused_images: checkUnused };
+                  notify_new_only: notifyNewOnly, check_unused_images: checkUnused,
+                  check_images_without_digest: checkWithoutDigest };
     if (schedule) _settings.check_schedule = schedule;
     const payload = { backup_enabled: enabled, backup_hours: hours,
       restart_stack: restartStack, cleanup_images: cleanupImages,
-      notify_new_only: notifyNewOnly, check_unused_images: checkUnused };
+      notify_new_only: notifyNewOnly, check_unused_images: checkUnused,
+      check_images_without_digest: checkWithoutDigest };
     if (schedule) payload.check_schedule = schedule;
     const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload) });
@@ -521,6 +525,7 @@
       if (el) el.style.color = '';
       renderNextCheck(d.next_check);
       if (unusedChanged) fetchStatus();   // show or remove the Images tab right away
+      if (withoutDigestChanged) fetchStatus();
     }
     document.getElementById('backup-options').style.display = enabled ? '' : 'none';
   }
@@ -741,6 +746,18 @@
           </div>
           <label class="toggle">
             <input type="checkbox" id="check-unused" ${_settings.check_unused_images ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">${t('settings.without_digest_label')}</div>
+            <div class="setting-desc">${t('settings.without_digest_desc')}</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="check-without-digest" ${_settings.check_images_without_digest ? 'checked' : ''} onchange="saveSettings()">
             <span class="toggle-slider"></span>
           </label>
         </div>
