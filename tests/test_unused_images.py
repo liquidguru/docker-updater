@@ -42,6 +42,14 @@ class Base(unittest.TestCase):
     def setUpClass(cls):
         cls.mod = load_app_module()
 
+    def setUp(self):
+        patch = mock.patch.object(self.mod, "load_state", return_value={})
+        patch.start()
+        self.addCleanup(patch.stop)
+        patch = mock.patch.object(self.mod, "CHECK_IMAGES_WITHOUT_DIGEST", False)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def scan(self, client, remote=None, host_id="local"):
         """Run the scanner with the registry answers in `remote` ({tag: digest|None})."""
         remote = remote or {}
@@ -123,10 +131,31 @@ class ScannerTests(Base):
         self.assertEqual(self.scan(client), {})
         self.assertEqual(self.calls, [])
 
-    def test_locally_built_images_are_ignored(self):
-        client = FakeClient([image("sha256:i1", ["myapp:dev"], [])])
-        self.assertEqual(self.scan(client), {})
+    def test_imported_images_without_repo_digests_use_image_ids(self):
+        mod = self.mod
+        for remote in ("sha256:i1", "sha256:new", None):
+            with self.subTest(remote=remote):
+                client = FakeClient([image("sha256:i1", ["nginx:latest"], [])])
+                with mock.patch.object(mod, "load_state",
+                                       return_value={"check_images_without_digest": True}), \
+                     mock.patch.object(mod, "get_remote_image_id", return_value=remote) as lookup:
+                    found = self.scan(client)
+                lookup.assert_called_once_with(
+                    "nginx:latest", {"os": "linux", "architecture": "amd64", "variant": None})
+                self.assertEqual(self.calls, [])
+                info = found["nginx:latest"]
+                self.assertEqual(info["local_digest"], "sha256:i1")
+                self.assertEqual(info["checked"], remote is not None)
+                self.assertEqual(info["has_update"], remote is not None and remote != "sha256:i1")
+                client.images.pull.assert_not_called()
+                client.api.pull.assert_not_called()
+
+    def test_locally_built_images_are_ignored_by_default(self):
+        client = FakeClient([image("sha256:i1", ["nginx:latest"], [])])
+        with mock.patch.object(self.mod, "get_remote_image_id") as lookup:
+            self.assertEqual(self.scan(client), {})
         self.assertEqual(self.calls, [])
+        lookup.assert_not_called()
 
     def test_a_digest_from_another_repository_is_not_compared(self):
         """get_local_digest falls back to the first digest of *any* repository;
@@ -167,6 +196,18 @@ class ScannerTests(Base):
 
 
 class EnabledTests(Base):
+    def test_no_digest_environment_default_and_saved_override(self):
+        import os
+        for value, expected in (("true", True), ("1", True), (" YES ", True), ("on", True),
+                                ("", False), ("false", False), ("0", False), ("no", False),
+                                ("maybe", False)):
+            with self.subTest(value=value), \
+                 mock.patch.dict(os.environ, {"CHECK_IMAGES_WITHOUT_DIGEST": value}):
+                mod = load_app_module()
+                self.assertIs(mod.images_without_digest_enabled({}), expected)
+                self.assertIs(mod.images_without_digest_enabled(
+                    {"check_images_without_digest": not expected}), not expected)
+
     def test_off_by_default(self):
         with mock.patch.object(self.mod, "CHECK_UNRUNNING_IMAGES", False):
             self.assertFalse(self.mod.unused_images_enabled({}))
@@ -347,6 +388,7 @@ class ApiTests(Base):
         self.patches = [
             mock.patch.object(self.mod, "AUTH_ENABLED", False),
             mock.patch.object(self.mod, "CHECK_UNRUNNING_IMAGES", False),
+            mock.patch.object(self.mod, "CHECK_IMAGES_WITHOUT_DIGEST", False),
             mock.patch.object(self.mod, "load_state", side_effect=lambda: self.state),
             mock.patch.object(self.mod, "save_state", side_effect=lambda s: setattr(self, "state", s)),
             mock.patch.object(self.mod.docker, "from_env", return_value=FakeClient()),
@@ -367,6 +409,37 @@ class ApiTests(Base):
         self.assertIs(self.client.get("/api/settings").get_json()["check_unused_images"], True)
         self.client.post("/api/settings", json={"check_unused_images": False})
         self.assertIs(self.client.get("/api/settings").get_json()["check_unused_images"], False)
+
+    def test_no_digest_setting_round_trips_and_overrides_environment(self):
+        key = "check_images_without_digest"
+        self.assertIs(self.client.get("/api/settings").get_json()[key], False)
+        with mock.patch.object(self.mod, "CHECK_IMAGES_WITHOUT_DIGEST", True):
+            self.assertIs(self.client.get("/api/settings").get_json()[key], True)
+            for enabled in (False, True, False):
+                self.assertEqual(self.client.post("/api/settings", json={key: enabled}).status_code, 200)
+                self.client.post("/api/settings", json={"backup_hours": 6})
+                self.assertIs(self.client.get("/api/settings").get_json()[key], enabled)
+                self.assertIs(self.state[key], enabled)
+
+    def test_no_digest_switch_hides_cached_opt_in_results_on_all_hosts(self):
+        self.state["check_unused_images"] = True
+        local = {"image": "nginx:latest", "has_update": True, "checked": True,
+                 "locally_built": True}
+        regular = {"image": "redis:7", "has_update": False, "checked": True}
+        self.state["unused_images"] = {"nginx:latest": local, "redis:7": regular}
+        host_state = {"available": {"web": local, "cache": regular},
+                      "unused_images": {"nginx:latest": local, "redis:7": regular}}
+        with mock.patch.object(self.mod, "load_hosts",
+                               return_value=[{"id": "vps", "name": "VPS"}]), \
+             mock.patch.object(self.mod, "load_host_state", return_value=host_state):
+            for enabled in (True, False):
+                self.client.post("/api/settings", json={"check_images_without_digest": enabled})
+                data = self.client.get("/api/status").get_json()
+                self.assertEqual([r["name"] for r in data["containers"]],
+                                 ["web", "cache"] if enabled else ["cache"])
+                self.assertEqual(sum(r["image"] == "nginx:latest" for r in data["unused_images"]),
+                                 2 if enabled else 0)
+                self.assertEqual(sum(r["image"] == "redis:7" for r in data["unused_images"]), 2)
 
     def test_unrelated_settings_posts_leave_it_alone(self):
         self.client.post("/api/settings", json={"check_unused_images": True})
