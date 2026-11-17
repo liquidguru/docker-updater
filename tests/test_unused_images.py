@@ -123,10 +123,22 @@ class ScannerTests(Base):
         self.assertEqual(self.scan(client), {})
         self.assertEqual(self.calls, [])
 
-    def test_locally_built_images_are_ignored(self):
-        client = FakeClient([image("sha256:i1", ["myapp:dev"], [])])
-        self.assertEqual(self.scan(client), {})
-        self.assertEqual(self.calls, [])
+    def test_imported_images_without_repo_digests_use_image_ids(self):
+        mod = self.mod
+        for remote in ("sha256:i1", "sha256:new", None):
+            with self.subTest(remote=remote):
+                client = FakeClient([image("sha256:i1", ["nginx:latest"], [])])
+                with mock.patch.object(mod, "get_remote_image_id", return_value=remote) as lookup:
+                    found = self.scan(client)
+                lookup.assert_called_once_with(
+                    "nginx:latest", {"os": "linux", "architecture": "amd64", "variant": None})
+                self.assertEqual(self.calls, [])
+                info = found["nginx:latest"]
+                self.assertEqual(info["local_digest"], "sha256:i1")
+                self.assertEqual(info["checked"], remote is not None)
+                self.assertEqual(info["has_update"], remote is not None and remote != "sha256:i1")
+                client.images.pull.assert_not_called()
+                client.api.pull.assert_not_called()
 
     def test_a_digest_from_another_repository_is_not_compared(self):
         """get_local_digest falls back to the first digest of *any* repository;

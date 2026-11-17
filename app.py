@@ -1555,28 +1555,6 @@ def _has_changelog(container) -> bool:
         return False
 
 
-def is_locally_built(container) -> bool:
-    """True only when the image really is a local build we can't compare.
-
-    "No RepoDigests" alone is not enough. A locally-built image has no digest
-    but *does* keep the tag it was built as. An image that was pulled and later
-    orphaned has neither — the tag moved on after an out-of-band pull, and on
-    the containerd image store the old image is left with no tag and no digest
-    even though a container is still running it. Treating that as a local build
-    dropped it from every scan with no log line, so a stale container could be
-    missed indefinitely (issue #23).
-
-    An image that can't be inspected at all is likewise unknown, not local.
-    """
-    try:
-        attrs = container.image.attrs
-        if attrs.get("RepoDigests"):
-            return False
-        return bool(attrs.get("RepoTags"))
-    except Exception:
-        return False
-
-
 # ── Update checking ───────────────────────────────────────────────────────────
 
 def _scan_host(client, host_id: str) -> dict:
@@ -1588,8 +1566,6 @@ def _scan_host(client, host_id: str) -> dict:
         if _is_helper_container(name):
             continue  # skip helper containers created by docker-updater
         image_name = container.attrs["Config"]["Image"]
-        if is_locally_built(container):
-            continue
         local_platform = get_local_platform(container)
         local_image_id = get_local_image_id(container)
         local_digest = get_local_digest(container, image_name)
@@ -1599,9 +1575,8 @@ def _scan_host(client, host_id: str) -> dict:
                 image_name, local_digest, local_image_id, local_platform,
             )
         else:
-            # The image has no RepoDigests — typically a pull that was orphaned
-            # when the tag moved on. Image IDs are still directly comparable, so
-            # fall back to those rather than giving up on the container (#23).
+            # Imported images and orphaned pulls can lack RepoDigests. Tags
+            # don't distinguish these from local builds; compare config IDs.
             local_digest = local_image_id
             remote_digest = get_remote_image_id(image_name, local_platform)
 
@@ -1691,8 +1666,6 @@ def _scan_unused_images(client, host_id: str) -> dict:
     uses (running ones are already covered by the normal scan). Left out on
     purpose:
       * untagged images — what every update leaves behind, and pure noise here;
-      * images with no RepoDigests — locally built or never pulled, so there is
-        nothing to compare;
       * anything a running container is using, matched both by image ID and by
         the reference the container was created from, so a quirk in how a
         daemon reports IDs can't make a running container's own image appear
@@ -1712,7 +1685,7 @@ def _scan_unused_images(client, host_id: str) -> dict:
         if attrs.get("Id") in used_ids:
             continue
         tags = [t for t in (attrs.get("RepoTags") or []) if t and "<none>" not in t]
-        if not tags or not attrs.get("RepoDigests"):
+        if not tags:
             continue
         holder = types.SimpleNamespace(image=image)   # what the get_local_* helpers read
         image_id = get_local_image_id(holder)
@@ -1721,9 +1694,15 @@ def _scan_unused_images(client, host_id: str) -> dict:
             if parse_image(tag) in used_refs:
                 continue
             local_digest = _local_digest_for_tag(attrs, tag)
-            if not local_digest:
+            if local_digest:
+                remote_digest = get_remote_digest(tag, local_digest, image_id, platform)
+            elif not attrs.get("RepoDigests") and image_id:
+                local_digest = image_id
+                remote_digest = get_remote_image_id(tag, platform)
+            else:
+                print(f"[checker:{host_id}] unused image {tag}: "
+                      "[unknown] no matching local digest or image ID")
                 continue
-            remote_digest = get_remote_digest(tag, local_digest, image_id, platform)
             has_update = bool(remote_digest and remote_digest != local_digest)
             print(f"[checker:{host_id}] unused image {tag}: "
                   f"[{'UPDATE' if has_update else 'ok' if remote_digest else 'no digest'}]")
@@ -3123,8 +3102,6 @@ def api_status():
             if _is_helper_container(name):
                 continue  # skip helper containers created by docker-updater
             image_name = container.attrs["Config"]["Image"]
-            if is_locally_built(container):
-                continue
             info  = state["available"].get(name, {})
             defer = state["deferred"].get(name)
             is_deferred = bool(defer and defer.get("until", "") > today)
