@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.18.0] — 2026-11-18
+
+### Added
+- **Optional check of images that have no registry digest** (imported offline or built locally) — **Settings → Also check images with no registry digest**, or `CHECK_IMAGES_WITHOUT_DIGEST=true` for the initial default (a choice saved in Settings wins). An image moved with `docker save` / `docker load` keeps its tag but loses its `RepoDigests`, so it looked exactly like a local build and was skipped, which meant it could never show as an update. With the option on, such an image is compared with the registry by image ID (nothing is pulled). **Off by default, and with it off nothing changes:** local builds are skipped as before, in the scan, the dashboard and the Images tab, and results cached while it was on are hidden again. A local build that shares a name with a public image can be flagged as an update when it is on, and Update would replace it with the registry image, so the setting says so. Contributed by @mayberryjp (#36)
+
 ## [1.17.2] — 2026-11-17
 
 ### Security
