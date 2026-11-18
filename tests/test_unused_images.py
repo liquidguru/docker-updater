@@ -421,25 +421,33 @@ class ApiTests(Base):
                 self.assertIs(self.client.get("/api/settings").get_json()[key], enabled)
                 self.assertIs(self.state[key], enabled)
 
-    def test_no_digest_switch_hides_cached_opt_in_results_on_all_hosts(self):
+    def test_no_digest_switch_marks_cached_remote_containers_unchecked(self):
         self.state["check_unused_images"] = True
         local = {"image": "nginx:latest", "has_update": True, "checked": True,
-                 "locally_built": True}
+                 "locally_built": True, "checked_at": "2026-11-18T00:00:00Z"}
         regular = {"image": "redis:7", "has_update": False, "checked": True}
         self.state["unused_images"] = {"nginx:latest": local, "redis:7": regular}
         host_state = {"available": {"web": local, "cache": regular},
+                      "deferred": {"web": {"until": "2999-01-01"}},
                       "unused_images": {"nginx:latest": local, "redis:7": regular}}
         with mock.patch.object(self.mod, "load_hosts",
                                return_value=[{"id": "vps", "name": "VPS"}]), \
-             mock.patch.object(self.mod, "load_host_state", return_value=host_state):
+             mock.patch.object(self.mod, "load_host_state", return_value=host_state), \
+             mock.patch.object(self.mod, "get_docker_client") as connect:
             for enabled in (True, False):
                 self.client.post("/api/settings", json={"check_images_without_digest": enabled})
                 data = self.client.get("/api/status").get_json()
-                self.assertEqual([r["name"] for r in data["containers"]],
-                                 ["web", "cache"] if enabled else ["cache"])
+                self.assertEqual([(r["name"], r["status"]) for r in data["containers"]],
+                                 [("web", "deferred" if enabled else "unknown"), ("cache", "ok")])
+                row = data["containers"][0]
+                self.assertEqual(row["unchecked_reason"], None if enabled else "no_registry_digest")
+                if not enabled:
+                    self.assertIsNone(row["checked_at"])
+                    self.assertIsNone(row["defer_until"])
                 self.assertEqual(sum(r["image"] == "nginx:latest" for r in data["unused_images"]),
                                  2 if enabled else 0)
                 self.assertEqual(sum(r["image"] == "redis:7" for r in data["unused_images"]), 2)
+        connect.assert_not_called()
 
     def test_unrelated_settings_posts_leave_it_alone(self):
         self.client.post("/api/settings", json={"check_unused_images": True})

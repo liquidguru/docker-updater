@@ -857,7 +857,7 @@ class StaleContainerDetectionTests(SafetyTestBase):
 
         self.assertFalse(self.mod.is_locally_built(C()))
 
-    def test_locally_built_image_is_still_skipped(self):
+    def test_locally_built_image_is_recorded_without_registry_lookups(self):
         mod, c = self._container([])
         c.image.attrs["RepoTags"] = ["myapp:latest"]
         self.assertTrue(mod.is_locally_built(c))
@@ -866,10 +866,18 @@ class StaleContainerDetectionTests(SafetyTestBase):
         with mock.patch.object(mod, "load_state", return_value={}), \
              mock.patch.object(mod, "CHECK_IMAGES_WITHOUT_DIGEST", False), \
              mock.patch.object(mod, "get_remote_image_id") as lookup, \
-             mock.patch.object(mod, "get_remote_digest") as digest:
-            self.assertEqual(mod._scan_host(client, "local"), {})
+             mock.patch.object(mod, "get_remote_digest") as digest, \
+             mock.patch.object(mod, "get_remote_download_analysis") as analysis:
+            found = mod._scan_host(client, "local")
+        self.assertEqual(found[c.name]["unchecked_reason"], "no_registry_digest")
+        self.assertTrue(found[c.name]["locally_built"])
+        self.assertFalse(found[c.name]["has_update"])
+        self.assertIsNone(found[c.name]["checked_at"])
         lookup.assert_not_called()
         digest.assert_not_called()
+        analysis.assert_not_called()
+        client.images.pull.assert_not_called()
+        client.api.pull.assert_not_called()
 
     def test_orphaned_pull_is_not_mistaken_for_a_local_build(self):
         mod, c = self._container([])
@@ -898,21 +906,31 @@ class StaleContainerDetectionTests(SafetyTestBase):
                 client.api.pull.assert_not_called()
                 digest.assert_not_called()
                 if tags and not enabled:
-                    self.assertEqual(found, {})
+                    self.assertEqual(found[c.name]["unchecked_reason"], "no_registry_digest")
+                    self.assertFalse(found[c.name]["has_update"])
                     lookup.assert_not_called()
                     continue
                 lookup.assert_called_once_with(
                     "amir20/dozzle:latest", {"os": "linux", "architecture": "amd64", "variant": None})
                 if remote is None:
-                    self.assertNotIn(c.name, found)
+                    if tags:
+                        self.assertEqual(found[c.name]["unchecked_reason"], "no_registry_digest")
+                        self.assertFalse(found[c.name]["has_update"])
+                    else:
+                        self.assertNotIn(c.name, found)
                 else:
                     self.assertEqual(found[c.name]["has_update"],
                                      remote != c.image.attrs["Id"])
 
-    def test_imported_image_dashboard_visibility_follows_setting(self):
+    def test_imported_image_is_unchecked_even_with_stale_update_and_deferral(self):
         mod, c = self._container([])
         self.state["deferred"] = {}
         c.image.attrs["RepoTags"] = ["amir20/dozzle:latest"]
+        self.state["available"][c.name] = {
+            "image": "amir20/dozzle:latest", "has_update": True,
+            "locally_built": True, "checked_at": "2026-11-18T00:00:00Z",
+        }
+        self.state["deferred"][c.name] = {"until": "2999-01-01"}
         client = mock.Mock()
         client.containers.list.return_value = [c]
         with mock.patch.object(mod.docker, "from_env", return_value=client), \
@@ -920,7 +938,9 @@ class StaleContainerDetectionTests(SafetyTestBase):
              mock.patch.object(mod, "load_state", return_value=self.state), \
              mock.patch.object(mod, "load_hosts", return_value=[]), \
              mock.patch.object(mod, "get_notify_info", return_value=None), \
-             mock.patch.object(mod, "sweep_local_backups"):
+             mock.patch.object(mod, "sweep_local_backups"), \
+             mock.patch.object(mod, "get_remote_image_id") as lookup, \
+             mock.patch.object(mod, "get_remote_digest") as digest:
             for enabled in (False, True, False):
                 with self.subTest(enabled=enabled):
                     self.state["check_images_without_digest"] = enabled
@@ -928,7 +948,50 @@ class StaleContainerDetectionTests(SafetyTestBase):
                     self.assertEqual(response.status_code, 200, response.get_json())
                     rows = response.get_json()["containers"]
                     self.assertEqual([(row["name"], row["status"]) for row in rows],
-                                     [("dozzle", "unknown")] if enabled else [])
+                                     [("dozzle", "deferred" if enabled else "unknown")])
+                    self.assertEqual(rows[0]["unchecked_reason"],
+                                     None if enabled else "no_registry_digest")
+                    if not enabled:
+                        self.assertIsNone(rows[0]["checked_at"])
+                        self.assertIsNone(rows[0]["defer_until"])
+        lookup.assert_not_called()
+        digest.assert_not_called()
+
+    def test_remote_scan_caches_unchecked_containers_without_notifying(self):
+        mod, c = self._container([])
+        c.image.attrs["RepoTags"] = ["amir20/dozzle:latest"]
+        client = mock.Mock()
+        client.containers.list.return_value = [c]
+        host_state = {}
+        self.state["check_images_without_digest"] = False
+        self.state["deferred"] = {}
+        with mock.patch.object(mod.docker, "from_env", return_value=client), \
+             mock.patch.object(mod, "AUTH_ENABLED", False), \
+             mock.patch.object(mod, "get_docker_client", return_value=client), \
+             mock.patch.object(mod, "load_state", side_effect=lambda: self.state), \
+             mock.patch.object(mod, "save_state"), \
+             mock.patch.object(mod, "load_hosts",
+                               return_value=[{"id": "nas", "name": "NAS", "url": "tcp://nas"}]), \
+             mock.patch.object(mod, "load_host_state", return_value=host_state), \
+             mock.patch.object(mod, "save_host_state"), \
+             mock.patch.object(mod, "unused_images_enabled", return_value=False), \
+             mock.patch.object(mod, "get_remote_image_id") as lookup, \
+             mock.patch.object(mod, "get_remote_digest") as digest, \
+             mock.patch.object(mod, "send_notification") as notify, \
+             mock.patch.object(mod, "get_notify_info", return_value=None), \
+             mock.patch.object(mod, "sweep_local_backups"):
+            mod.check_for_updates(notify=True)
+            response = mod.app.test_client().get("/api/status")
+            self.assertEqual(response.status_code, 200, response.get_json())
+            data = response.get_json()
+        self.assertEqual(host_state["available"][c.name]["unchecked_reason"], "no_registry_digest")
+        self.assertEqual([(row["host_id"], row["status"], row["unchecked_reason"])
+                          for row in data["containers"]],
+                         [("local", "unknown", "no_registry_digest"),
+                          ("nas", "unknown", "no_registry_digest")])
+        lookup.assert_not_called()
+        digest.assert_not_called()
+        notify.assert_not_called()
 
 
 class ImageReferenceParsingTests(SafetyTestBase):

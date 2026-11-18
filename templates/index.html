@@ -1383,7 +1383,9 @@
     const badge = isUpdating
       ? `<span class="badge-status badge-updating"><span class="spinner"></span> ${t('badge.updating')}</span>`
       : (statusMap[c.status] || '');
-    const checkedAt = c.checked_at ? t('card.checked', {when: timeAgo(c.checked_at)}) : t('card.not_checked');
+    const checkedAt = c.unchecked_reason === 'no_registry_digest'
+      ? t('card.no_registry_digest')
+      : c.checked_at ? t('card.checked', {when: timeAgo(c.checked_at)}) : t('card.not_checked');
     // Image size (#24): on-disk size of the running image, plus the compressed
     // download size of the pending update when one is known. Different units,
     // so they are labelled rather than shown as "A → B".
