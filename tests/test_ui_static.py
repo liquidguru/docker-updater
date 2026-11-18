@@ -40,6 +40,66 @@ class UiStaticTests(unittest.TestCase):
         self.assertNotRegex(self.index, r"(?<!show)\balert\s*\(")
         self.assertNotRegex(self.index, r"(?<!show)\bconfirm\s*\(")
 
+    def test_no_digest_containers_have_a_reason_and_no_update_action_in_both_languages(self):
+        def extract(name):
+            match = re.search(rf"  function {name}\([^)]*\) \{{.*?\n  \}}\n", self.index, re.S)
+            self.assertIsNotNone(match, name)
+            return match.group(0)
+
+        script = """
+const catalogs = %s;
+let messages;
+const t = (key, params) => messages[key].replace(/\\{(\\w+)\\}/g,
+  (m, k) => params && k in params ? params[k] : m);
+const selectedNames = new Set(), multiHost = true;
+const timeAgo = () => 'earlier';
+const list = {};
+const document = {getElementById: () => list};
+%s
+const out = {};
+for (const language of ['en', 'zh-CN']) {
+  messages = catalogs[language];
+  for (const host of ['local', 'nas']) {
+    const c = {name: 'offline-app', image: 'app:latest', host_id: host,
+      host_name: 'NAS', status: 'unknown', unchecked_reason: 'no_registry_digest',
+      checked_at: '2026-11-18T00:00:00Z'};
+    renderContainerList([c, {...c, name: 'checked-app', status: 'ok'}], 'unknown');
+    out[language + '_' + host] = list.innerHTML;
+  }
+  out[language + '_ordinary'] = cardHTML({
+    name: 'ordinary', image: 'nginx:latest', host_id: 'local', status: 'unknown'
+  });
+  out[language + '_update'] = cardHTML({
+    name: 'update-app', image: 'nginx:latest', host_id: 'local', status: 'update'
+  });
+}
+console.log(JSON.stringify(out));
+""" % (json.dumps(self.messages), "\n".join(
+            extract(name) for name in ("esc", "cardHTML", "renderContainerList")))
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(script)
+            path = f.name
+        try:
+            result = subprocess.run(["node", path], capture_output=True, text=True,
+                                    encoding="utf-8", timeout=30)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        for language in ("en", "zh-CN"):
+            for host in ("local", "nas"):
+                with self.subTest(language=language, host=host):
+                    html = out[f"{language}_{host}"]
+                    self.assertIn(self.messages[language]["card.no_registry_digest"], html)
+                    self.assertIn("status-unknown", html)
+                    self.assertNotIn("checked-app", html)
+                    self.assertNotIn("earlier", html)
+                    self.assertNotIn("confirmUpdate(", html)
+                    self.assertNotIn("toggleSelect(", html)
+                    self.assertNotIn(self.messages[language]["empty.unknown_desc"], html)
+            self.assertIn(self.messages[language]["card.not_checked"], out[f"{language}_ordinary"])
+            self.assertIn("confirmUpdate(", out[f"{language}_update"])
+
     def test_no_known_corruption_markers(self):
         for marker in ("statusOkstatusOk", "'?? '", ">??<", " e:'??'", " e:'?'", "refreshStatus()"):
             self.assertNotIn(marker, self.index)

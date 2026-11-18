@@ -1595,6 +1595,18 @@ def _scan_host(client, host_id: str) -> dict:
             continue  # skip helper containers created by docker-updater
         image_name = container.attrs["Config"]["Image"]
         local_build = is_locally_built(container)
+        if local_build:
+            # Remote dashboards only have the cached scan, so retain unchecked
+            # containers even when registry lookups are disabled or fail.
+            available[name] = {
+                "image": image_name,
+                "has_update": False,
+                "locally_built": True,
+                "unchecked_reason": "no_registry_digest",
+                "checked_at": None,
+                "compose_project": (container.labels or {}).get("com.docker.compose.project"),
+                "image_size": get_local_image_size(container),
+            }
         if local_build and not check_without_digest:
             continue
         local_platform = get_local_platform(container)
@@ -3144,12 +3156,16 @@ def api_status():
             if _is_helper_container(name):
                 continue  # skip helper containers created by docker-updater
             image_name = container.attrs["Config"]["Image"]
-            if not check_without_digest and is_locally_built(container):
-                continue
             info  = state["available"].get(name, {})
+            unchecked_reason = (
+                "no_registry_digest" if not check_without_digest and is_locally_built(container)
+                else info.get("unchecked_reason")
+            )
             defer = state["deferred"].get(name)
-            is_deferred = bool(defer and defer.get("until", "") > today)
-            if info:
+            is_deferred = bool(not unchecked_reason and defer and defer.get("until", "") > today)
+            if unchecked_reason:
+                status = "unknown"
+            elif info:
                 status = "update" if info.get("has_update") and not is_deferred else (
                          "deferred" if is_deferred else "ok")
             else:
@@ -3172,8 +3188,9 @@ def api_status():
             _compose = (container.labels or {}).get("com.docker.compose.project")
             containers.append({
                 "name": name, "image": image_name, "status": status,
+                "unchecked_reason": unchecked_reason,
                 "defer_until": defer.get("until") if is_deferred else None,
-                "checked_at": info.get("checked_at"),
+                "checked_at": None if unchecked_reason else info.get("checked_at"),
                 "updating": is_updating,
                 "has_logs": has_logs,
                 "has_changelog": _has_changelog(container) or bool(_cl_override),
@@ -3219,12 +3236,16 @@ def api_status():
             save_host_state(host_id, hs)
 
         for cname, cinfo in hs.get("available", {}).items():
-            if cinfo.get("locally_built") and not check_without_digest:
-                continue
+            unchecked_reason = (
+                "no_registry_digest" if cinfo.get("locally_built") and not check_without_digest
+                else cinfo.get("unchecked_reason")
+            )
             defer = h_deferred.get(cname)
-            is_deferred_c = bool(defer and defer.get("until", "") > today)
+            is_deferred_c = bool(not unchecked_reason and defer and defer.get("until", "") > today)
             has_update = cinfo.get("has_update", False)
-            if has_update and not is_deferred_c:
+            if unchecked_reason:
+                cstatus = "unknown"
+            elif has_update and not is_deferred_c:
                 cstatus = "update"
             elif is_deferred_c:
                 cstatus = "deferred"
@@ -3246,8 +3267,9 @@ def api_status():
             containers.append({
                 "name": cname, "image": cinfo.get("image", ""),
                 "status": cstatus,
+                "unchecked_reason": unchecked_reason,
                 "defer_until": defer.get("until") if is_deferred_c else None,
-                "checked_at": cinfo.get("checked_at"),
+                "checked_at": None if unchecked_reason else cinfo.get("checked_at"),
                 "updating": is_updating,
                 "has_logs": has_logs,
                 "has_changelog": bool(_h_cl_override),
