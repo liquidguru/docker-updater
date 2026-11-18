@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.18.1] — 2026-11-18
+
+### Changed
+- **Containers whose image has no registry digest now show up in Unchecked** — offline imports (`docker save` / `docker load`) and local builds used to be hidden from the dashboard altogether, so there was no way to tell they weren't being watched. They are now listed under **Unchecked** by default with the reason "Built locally or imported, no registry digest" (English and Chinese), with no registry lookup and no Update button, so nothing can be overwritten. The opt-in setting from 1.18.0 still decides whether they are actually checked; turning it off puts them back in Unchecked even if an earlier check had found an update or they were deferred, and if a lookup fails with it on they stay in Unchecked instead of disappearing. Remote hosts keep the entries in their cached scan, so no extra connections are made. Contributed by @mayberryjp (#37, #38)
+
 ## [1.18.0] — 2026-11-18
 
 ### Added
