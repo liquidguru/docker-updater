@@ -2,6 +2,14 @@
 
 All notable changes to docker-updater are documented here.
 
+## [1.18.2] — 2026-11-24
+
+### Fixed
+- **A container managed by Docker Compose could be left stopped after the next `docker compose up -d` (#39)** — the backup kept for rollback was the old container renamed to `<name>_old`, and it still carried its `com.docker.compose.*` labels. Compose finds a service's containers by label, so it saw two copies of the service; while recreating the live one it removed the backup and left the live container in the **Created** state, never started. Reproduced and fixed on Docker 29 / Compose 5.8. For a Compose-managed container the backup is now a stopped copy **without** the Compose labels, made before the new image is pulled and swapped in once the update has worked (the self-update path too). `docker compose up` then leaves it alone, and it no longer deletes your rollback point. Thanks @m0nn3
+  - **One thing changes on rollback:** the container you roll back to is that copy, so Compose does not recognise it afterwards (its labels cannot be put back). `docker compose up` reports that the name is in use; the rollback log explains the way back (pin the previous image in your compose file, `docker rm -f` the container, `docker compose up -d`). Its networks, aliases and fixed addresses are restored on rollback.
+  - Falls back to the previous behaviour (renaming the original) when a copy can't be made, e.g. if the image tag had already moved on before the update started.
+- **Rollback was refused on hosts using Docker's containerd image store** (the default for new Docker 29 installs): "The backup's image is no longer present". Once an image's tag moves on, that store no longer lets you look the old image up, although the backup container is intact and starts fine. The check is now relaxed only on that store; if the backup really cannot start, the current container is put straight back, as before. Hosts using the classic store keep the strict check.
+
 ## [1.18.1] — 2026-11-18
 
 ### Changed

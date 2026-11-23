@@ -72,7 +72,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.18.1"
+APP_VERSION          = "1.18.2"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -165,8 +165,9 @@ _stack_updated: dict[str, set] = {}   # stack key -> names just updated (exclude
 def _is_helper_container(name: str) -> bool:
     """True for containers docker-updater creates during an operation: `_old`
     backups and the `_rollingback` container parked mid-rollback. Neither is a
-    managed service, so both must stay out of update checks and the dashboard."""
-    return name.endswith(("_old", "_rollingback"))
+    managed service, so both must stay out of update checks and the dashboard.
+    `_oldtmp` is the Compose-safe backup copy while it is being prepared."""
+    return name.endswith(("_old", "_rollingback", "_oldtmp"))
 
 
 def _container_is_up(client, name: str, checks: int = 3,
@@ -534,6 +535,200 @@ def _container_extras(cfg: dict) -> dict:
     return extras
 
 
+# ── Compose-managed containers and their rollback backup (issue #39) ──────────
+# Docker Compose finds a service's containers by their `com.docker.compose.*`
+# labels, never by name, and a container's labels cannot be changed once it
+# exists. A backup made by renaming the old container to `<name>_old` therefore
+# still looks like a second copy of the service. `docker compose up` then tried
+# to tidy it away while recreating the live one, which left the live container
+# Created but never started (and deleted the backup). For a Compose-managed
+# container the backup is instead a stopped copy that carries no Compose labels.
+_COMPOSE_LABEL_PREFIX = "com.docker.compose."
+_BACKUP_OF_LABEL = "io.docker-updater.backup-of"
+_BACKUP_NETS_LABEL = "io.docker-updater.networks"
+_BACKUP_TMP_SUFFIX = "_oldtmp"
+_BACKUP_TMP_MAX_AGE = datetime.timedelta(hours=2)
+
+
+def _containerd_image_store(client) -> bool:
+    """True when the daemon uses the containerd image store (Docker 29's default
+    for new installs). There an image whose tag has moved on is no longer
+    addressable, even while a container made from it exists."""
+    try:
+        status = client.info().get("DriverStatus") or []
+        return any("io.containerd.snapshotter" in str(value) for _, value in status)
+    except Exception:
+        return False
+
+
+def _compose_project(cfg: dict) -> str | None:
+    return (cfg.get("Labels") or {}).get("com.docker.compose.project") or None
+
+
+def _without_compose_labels(labels: dict | None) -> dict:
+    return {k: v for k, v in (labels or {}).items() if not k.startswith(_COMPOSE_LABEL_PREFIX)}
+
+
+def _network_specs(nets: dict, own_id: str) -> dict:
+    """What `docker network connect` needs for each network a container is on."""
+    short = (own_id or "")[:12]
+    return {
+        n: {
+            "aliases": [a for a in (d.get("Aliases") or []) if a != short],
+            "ipv4_address": (d.get("IPAMConfig") or {}).get("IPv4Address") or None,
+            "ipv6_address": (d.get("IPAMConfig") or {}).get("IPv6Address") or None,
+        }
+        for n, d in (nets or {}).items()
+    }
+
+
+def _same_image_content(client, image_name: str, image_id: str | None) -> bool:
+    """True when the tag still resolves to the very filesystem the container runs.
+    Image IDs can't be compared directly: on the containerd image store the ID of
+    a tag and the image ID a container reports are not the same kind of digest."""
+    try:
+        if not image_id:
+            return False
+        a = (client.images.get(image_name).attrs.get("RootFS") or {}).get("Layers")
+        b = (client.images.get(image_id).attrs.get("RootFS") or {}).get("Layers")
+        return bool(a) and a == b
+    except Exception:
+        return False
+
+
+def _create_backup_clone(client, name: str, cfg: dict, hcfg: dict, nets: dict,
+                         image_name: str, old_id: str | None, old_image_id: str | None, emit):
+    """Create `<name>_oldtmp`: a stopped copy of the running container without
+    its Compose labels, to become the `_old` backup once the update has worked.
+
+    It must be created BEFORE the new image is pulled: the tag then still points
+    at the image the container runs. Once it has moved, the old image can no
+    longer be used to create anything on the containerd image store. Returns the
+    container, or None when a faithful copy is not possible, in which case the
+    caller keeps the renamed original as the backup, as it always did.
+    """
+    tmp = f"{name}{_BACKUP_TMP_SUFFIX}"
+    try:
+        if not _same_image_content(client, image_name, old_image_id):
+            emit("  (the image tag no longer points at what this container runs, so a "
+                 "Compose-safe backup copy can't be made; the renamed container will be "
+                 "the backup instead)")
+            return None
+        try:
+            client.containers.get(tmp).remove(force=True)   # a leftover from an earlier attempt
+        except Exception:
+            pass
+
+        specs = _network_specs(nets, old_id or "")
+        net_mode = hcfg.get("NetworkMode", "bridge")
+        hc = client.api.create_host_config(
+            binds=hcfg.get("Binds") or [],
+            mounts=_mounts_from_hcfg(hcfg),
+            port_bindings=hcfg.get("PortBindings") or {},
+            network_mode=net_mode,
+            restart_policy={"Name": "no"},
+            cap_add=hcfg.get("CapAdd"), cap_drop=hcfg.get("CapDrop"),
+            privileged=hcfg.get("Privileged", False),
+            security_opt=hcfg.get("SecurityOpt"), devices=hcfg.get("Devices"),
+            extra_hosts=hcfg.get("ExtraHosts"), dns=hcfg.get("Dns"),
+            dns_search=hcfg.get("DnsSearch"), volumes_from=hcfg.get("VolumesFrom"),
+            pid_mode=hcfg.get("PidMode") or "", ipc_mode=hcfg.get("IpcMode") or "",
+            tmpfs=hcfg.get("Tmpfs"),
+        )
+        _carry_over_hostconfig(hc, hcfg)
+
+        # Only the primary network, and without its fixed addresses: the live
+        # container still holds them. A rollback reconnects the lot (see
+        # _restore_backup_networks) from the specs kept in a label.
+        first = next(iter(specs), None)
+        nc = None
+        if first:
+            nc = client.api.create_networking_config({
+                first: client.api.create_endpoint_config(aliases=specs[first]["aliases"] or None)
+            })
+
+        labels = _without_compose_labels(cfg.get("Labels"))
+        labels[_BACKUP_OF_LABEL] = name
+        labels[_BACKUP_NETS_LABEL] = json.dumps(specs)
+        client.api.create_container(
+            image=image_name, name=tmp,
+            hostname=_recreate_hostname(cfg), user=cfg.get("User", ""),
+            detach=True, environment=cfg.get("Env"), command=cfg.get("Cmd"),
+            entrypoint=cfg.get("Entrypoint"), labels=labels,
+            volumes=list((cfg.get("Volumes") or {}).keys()) or None,
+            working_dir=cfg.get("WorkingDir", ""),
+            ports=_exposed_ports(cfg) or None,
+            host_config=hc, networking_config=nc,
+            **_container_extras(cfg),
+        )
+        return client.containers.get(tmp)
+    except Exception as e:
+        emit(f"  Could not prepare a Compose-safe backup copy ({e}); the renamed "
+             f"container will be the backup instead.")
+        try:
+            client.containers.get(tmp).remove(force=True)
+        except Exception:
+            pass
+        return None
+
+
+def _promote_backup_clone(client, clone, original, name: str, emit) -> bool:
+    """Swap the Compose-labelled original (currently `<name>_old`) for the
+    label-free copy. True when the copy is now the `_old` backup."""
+    old_name, aside = f"{name}_old", f"{name}_oldorig"
+    try:
+        original.rename(aside)
+    except Exception as e:
+        emit(f"  Could not swap in the Compose-safe backup ({e}); keeping the renamed container.")
+        return False
+    try:
+        clone.rename(old_name)
+    except Exception as e:
+        emit(f"  Could not swap in the Compose-safe backup ({e}); keeping the renamed container.")
+        try:
+            original.rename(old_name)
+        except Exception as e2:
+            emit(f"  Could not put the backup back to '{old_name}': {e2} (it is '{aside}').")
+        return False
+    try:
+        original.remove(force=True)
+    except Exception as e:
+        emit(f"  Note: could not remove '{aside}' ({e}). It still carries the Compose "
+             f"labels, so remove it before the next `docker compose up`.")
+    emit("  The backup is a copy without Docker Compose's labels, so `docker compose up` "
+         "leaves it alone.")
+    return True
+
+
+def _restore_backup_networks(client, container, emit) -> None:
+    """Re-attach a Compose-safe backup to every network, with the aliases and
+    fixed addresses the original had. It was created on its primary network
+    only and without fixed addresses, because the live container held those."""
+    try:
+        specs = json.loads((container.attrs.get("Config", {}).get("Labels") or {})
+                           .get(_BACKUP_NETS_LABEL) or "{}")
+    except Exception:
+        return
+    if not specs:
+        return
+    try:
+        container.reload()
+    except Exception:
+        pass
+    attached = (container.attrs.get("NetworkSettings") or {}).get("Networks") or {}
+    for net, spec in specs.items():
+        if net in ("host", "none") or net.startswith("container:"):
+            continue
+        try:
+            if net in attached:
+                client.api.disconnect_container_from_network(container.id, net, force=True)
+            client.api.connect_container_to_network(
+                container.id, net, aliases=spec.get("aliases") or None,
+                ipv4_address=spec.get("ipv4_address"), ipv6_address=spec.get("ipv6_address"))
+        except Exception as e:
+            emit(f"  Could not reconnect the backup to network '{net}': {e}")
+
+
 def _human_size(n: float) -> str:
     n = float(n or 0)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -798,6 +993,16 @@ def _helper_reserve_backup(name: str, hours: int, policy: dict) -> None:
         print(f"[self-update-helper] Could not reserve backup: {e}")
 
 
+def _helper_drop_clone(client, clone_name: str | None) -> None:
+    """Remove the Compose-safe backup copy if it was not swapped in."""
+    if not clone_name:
+        return
+    try:
+        client.containers.get(clone_name).remove(force=True)
+    except Exception:
+        pass
+
+
 def _run_self_update_helper() -> None:
     """Called when DOCKER_UPDATER_SELF_UPDATE_SPEC_B64 is set in the environment.
 
@@ -826,6 +1031,7 @@ def _run_self_update_helper() -> None:
     backup_hours   = int(spec.get("backup_hours", 24))
     cleanup_images = spec.get("cleanup_images", False)
     old_image_id   = spec.get("old_image_id")
+    clone_name     = spec.get("backup_clone")
     orig_policy    = hcfg.get("RestartPolicy", {"Name": "unless-stopped"})
     old_name       = f"{name}_old"
 
@@ -939,6 +1145,13 @@ def _run_self_update_helper() -> None:
         # ── Success ───────────────────────────────────────────────────────────
         print(f"[self-update-helper] {name} is up ({why}).")
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        if clone_name and old_container is not None and (backup_enabled or not health_ok):
+            try:
+                if _promote_backup_clone(client, client.containers.get(clone_name), old_container,
+                                         name, lambda m: print(f"[self-update-helper] {m}")):
+                    clone_name = None
+            except Exception as e:
+                print(f"[self-update-helper] Compose-safe backup swap failed: {e}")
         if backup_enabled or not health_ok:
             expires_iso = (
                 datetime.datetime.utcnow() + datetime.timedelta(hours=backup_hours)
@@ -973,6 +1186,7 @@ def _run_self_update_helper() -> None:
             "updated_at": now_iso, "status": "success", "host_id": "local",
         }
         _helper_write_state(name, history_entry, rollback_entry)
+        _helper_drop_clone(client, clone_name)
 
     except Exception as recreate_err:
         # ── Failure: roll back to _old ────────────────────────────────────────
@@ -1020,6 +1234,7 @@ def _run_self_update_helper() -> None:
             "status": f"error: {recreate_err}", "host_id": "local",
         }
         _helper_write_state(name, history_entry, None)
+        _helper_drop_clone(client, clone_name)
 
 
 def _log_path(name: str, host_id: str = "local") -> str:
@@ -2180,6 +2395,8 @@ def apply_update(container_name: str, host_id: str = "local",
     log = _update_logs[key]
 
     image_name = "?"  # will be overwritten once container config is read
+    _backup_clone = None          # Compose-safe backup copy, see _create_backup_clone
+    _clone_in_use = False         # promoted to the backup, or handed to the self-update helper
 
     def emit(line: str) -> None:
         print(f"[update:{host_id}:{container_name}] {line}")
@@ -2210,6 +2427,10 @@ def apply_update(container_name: str, host_id: str = "local",
         emit(f"Host      : {host_id}")
         emit(f"Image     : {image_name}")
         emit("")
+        if _compose_project(cfg):
+            emit("▶ Preparing a Compose-safe backup copy...")
+            _backup_clone = _create_backup_clone(client, container_name, cfg, hcfg, nets,
+                                                 image_name, old_id, old_image_id, emit)
         emit("▶ Pulling latest image...")
 
         # Docker reports pull failures as an `error` field inside the stream
@@ -2306,6 +2527,7 @@ def apply_update(container_name: str, host_id: str = "local",
                 "backup_hours": _su_backup_hours,
                 "cleanup_images": _su_cleanup_images,
                 "old_image_id": old_image_id,
+                "backup_clone": _backup_clone.name if _backup_clone is not None else None,
             })
             _su_spec_b64 = base64.b64encode(_su_spec.encode()).decode()
             _su_volumes = {
@@ -2325,6 +2547,7 @@ def apply_update(container_name: str, host_id: str = "local",
                     detach=True,
                     remove=True,
                 )
+                _clone_in_use = _backup_clone is not None   # the helper now owns it
                 emit("  Helper spawned — docker-updater will restart in ~10 seconds.")
                 emit("\nSUCCESS: Self-update handed off. The page will be unreachable")
                 emit("  briefly while the new container starts. Refresh after 30s.")
@@ -2459,6 +2682,9 @@ def apply_update(container_name: str, host_id: str = "local",
                     emit(f"  {_why.capitalize()} — keeping '{old_name}' until the "
                          f"new container reports healthy (at most {_backup_hours}h), "
                          f"rather than removing the only way back now.")
+                if _backup_clone is not None and _promote_backup_clone(
+                        client, _backup_clone, old_container, container_name, emit):
+                    _clone_in_use = True
                 if _cleanup_images:
                     emit("  Old image kept while that backup exists. It will be "
                          "removed when the backup is released, deleted or expires.")
@@ -2585,6 +2811,11 @@ def apply_update(container_name: str, host_id: str = "local",
             hs["history"] = hs["history"][:50]
             save_host_state(host_id, hs)
     finally:
+        if _backup_clone is not None and not _clone_in_use:
+            try:
+                _backup_clone.remove(force=True)
+            except Exception:
+                pass
         _persist_log(key, container_name, host_id)
         with _logs_lock:
             _update_running.discard(key)
@@ -2645,10 +2876,20 @@ def apply_rollback(container_name: str, host_id: str = "local",
         try:
             client.images.get(_bk_image_id)
         except docker.errors.ImageNotFound:
-            emit(f"\nERROR: The backup's image is no longer present ({_bk_image}).")
-            emit("  It was probably removed by an image cleanup.")
-            emit("  The current container has NOT been touched and is still running.")
-            raise RuntimeError("rollback aborted — backup image missing")
+            if not _containerd_image_store(client):
+                emit(f"\nERROR: The backup's image is no longer present ({_bk_image}).")
+                emit("  It was probably removed by an image cleanup.")
+                emit("  The current container has NOT been touched and is still running.")
+                raise RuntimeError("rollback aborted — backup image missing")
+            # On the containerd image store (the default for new Docker 29
+            # installs) the superseded image stops being addressable once its tag
+            # has moved, although the backup container still has its filesystem and
+            # starts fine. Aborting here made every rollback fail on such hosts. If
+            # it genuinely can't start, the recovery below puts the current
+            # container straight back.
+            emit("  Note: the backup's image can't be looked up any more (normal on the "
+                 "containerd image store). Continuing: if the backup does not start, "
+                 "the current container is restored.")
         emit(f"  Backup OK — '{old_name}' ({_bk_image}).")
 
         emit("▶ Stopping current container...")
@@ -2684,6 +2925,8 @@ def apply_rollback(container_name: str, host_id: str = "local",
                      f"'{container_name}' and start it.")
 
         emit("▶ Restoring previous container...")
+        _compose_safe = bool((old_container.attrs.get("Config", {}).get("Labels") or {})
+                             .get(_BACKUP_OF_LABEL))
         try:
             old_container.rename(container_name)
         except Exception as _promote_err:
@@ -2706,6 +2949,8 @@ def apply_rollback(container_name: str, host_id: str = "local",
             pass
         _health_ok = False
         try:
+            if _compose_safe:
+                _restore_backup_networks(client, old_container, emit)
             old_container.start()
             _ok, _health_ok, _why = _container_is_up(client, container_name)
             if not _ok:
@@ -2796,6 +3041,12 @@ def apply_rollback(container_name: str, host_id: str = "local",
             except Exception as _kp_err:
                 emit(f"  Note: could not keep the previous container: {_kp_err}")
         emit(f"\nSUCCESS: {container_name} rolled back to previous version.")
+        if _compose_safe:
+            emit("  Note: this container came from a backup copy, and a backup can't carry")
+            emit("  Docker Compose's labels, so Compose no longer recognises it. `docker compose")
+            emit(f"  up` will report that the name '{container_name}' is in use. To hand it back")
+            emit("  to Compose, pin the previous image in your compose file, remove this")
+            emit(f"  container (`docker rm -f {container_name}`) and run `docker compose up -d`.")
 
         history_entry = {
             "container": container_name, "image": "↩ rollback",
@@ -4188,6 +4439,26 @@ def recover_interrupted_operations() -> None:
         except Exception as e:
             print(f"[recover] CRITICAL: could not restore '{_base}' from "
                   f"'{_p.name}': {e}")
+
+    # A Compose-safe backup copy that never became the backup (docker-updater was
+    # stopped mid-update). Only copies old enough that no update can still be
+    # preparing them, or a self-update helper be about to swap one in.
+    try:
+        for _c in client.containers.list(all=True):
+            if not (_c.name or "").endswith(_BACKUP_TMP_SUFFIX):
+                continue
+            if not (_c.labels or {}).get(_BACKUP_OF_LABEL):
+                continue
+            try:
+                _born = datetime.datetime.strptime(
+                    (_c.attrs.get("Created") or "")[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                continue
+            if datetime.datetime.utcnow() - _born > _BACKUP_TMP_MAX_AGE:
+                _c.remove(force=True)
+                print(f"[recover] Removed unfinished backup copy '{_c.name}'")
+    except Exception as e:
+        print(f"[recover] Could not tidy backup copies: {e}")
 
     try:
         olds = [c for c in client.containers.list(all=True) if c.name.endswith("_old")]
