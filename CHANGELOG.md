@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [2.1.0] — 2026-11-25
+
+### Added
+- **Groundwork for a German translation.** The language list now has a third entry, `de`, with an empty block in `static/i18n_messages.json`. Nothing changes for you yet: a language is only offered in Settings, and followed from a German browser, once its block has strings, and any string it is missing is shown in English. A translator can now add the German block without touching any code. New tests check that a German block uses only existing keys and keeps every `{placeholder}`. Thanks @m0nn3 for offering to translate and maintain it.
+
 ## [2.0.2] — 2026-11-24
 
 ### Fixed

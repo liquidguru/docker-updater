@@ -1,29 +1,44 @@
-/* docker-updater i18n + dialogs (en / zh-CN) */
+/* docker-updater i18n + dialogs (en / zh-CN / de) */
 (function (global) {
-  const MESSAGES = global.I18N_MESSAGES || { en: {}, "zh-CN": {} };
+  const MESSAGES = global.I18N_MESSAGES || { en: {}, "zh-CN": {}, de: {} };
 
-  const LS_MODE = "du_lang_mode"; // auto | en | zh-CN
+  const LS_MODE = "du_lang_mode"; // auto | en | zh-CN | de
+
+  // A language is offered only once its block in i18n_messages.json has strings, so an
+  // empty placeholder block never shows up as a language that is really just English.
+  // Any string a language is missing falls back to English (see t()).
+  const LANGS = ["en", "zh-CN", "de"];
+  function hasStrings(lang) {
+    if (lang === "en") return true;
+    const pack = MESSAGES[lang];
+    return !!pack && Object.keys(pack).length > 0;
+  }
+  function availableLangs() {
+    return LANGS.filter(hasStrings);
+  }
 
   function browserLang() {
     const nav = (navigator.language || navigator.userLanguage || "en").toLowerCase();
-    return nav.startsWith("zh") ? "zh-CN" : "en";
+    if (nav.startsWith("zh")) return "zh-CN";
+    if (nav.startsWith("de") && hasStrings("de")) return "de";
+    return "en";
   }
 
   function getLangMode() {
     const m = localStorage.getItem(LS_MODE);
-    if (m === "en" || m === "zh-CN" || m === "auto") return m;
+    if (m === "auto" || (LANGS.includes(m) && hasStrings(m))) return m;
     return "auto";
   }
 
   function setLangMode(mode) {
-    if (mode === "en" || mode === "zh-CN" || mode === "auto") {
+    if (mode === "auto" || (LANGS.includes(mode) && hasStrings(mode))) {
       localStorage.setItem(LS_MODE, mode);
     }
   }
 
   function resolveLang(mode) {
     mode = mode || getLangMode();
-    if (mode === "en" || mode === "zh-CN") return mode;
+    if (LANGS.includes(mode) && hasStrings(mode)) return mode;
     return browserLang();
   }
 
@@ -43,7 +58,7 @@
   function setLanguage(mode) {
     setLangMode(mode);
     currentLang = resolveLang(mode);
-    document.documentElement.lang = currentLang === "zh-CN" ? "zh-CN" : "en";
+    document.documentElement.lang = currentLang;
     applyI18n();
     return currentLang;
   }
@@ -199,7 +214,7 @@
   // init language from storage immediately
   currentLang = resolveLang();
   if (document.documentElement) {
-    document.documentElement.lang = currentLang === "zh-CN" ? "zh-CN" : "en";
+    document.documentElement.lang = currentLang;
   }
 
   global.I18N = {
@@ -209,6 +224,7 @@
     getLangMode,
     resolveLang,
     browserLang,
+    availableLangs,
     get currentLang() {
       return currentLang;
     },

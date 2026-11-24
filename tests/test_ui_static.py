@@ -123,7 +123,7 @@ console.log(JSON.stringify(out));
                 f"Catalog must be injected before i18n.js in {name} template",
             )
         self.assertIn(
-            'const MESSAGES = global.I18N_MESSAGES || { en: {}, "zh-CN": {} };',
+            'const MESSAGES = global.I18N_MESSAGES || { en: {}, "zh-CN": {}, de: {} };',
             self.i18n_js,
         )
         self.assertNotRegex(self.i18n_js, r'const MESSAGES = \{"en":')

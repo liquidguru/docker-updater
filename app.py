@@ -73,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "2.0.2"
+APP_VERSION          = "2.1.0"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1366,9 +1366,12 @@ def _load_i18n_messages() -> dict:
             messages = json.load(f)
     except Exception as e:
         print(f"[i18n] Could not load messages: {e}")
-        messages = {"en": {}, "zh-CN": {}}
+        messages = {"en": {}, "zh-CN": {}, "de": {}}
     _I18N_MESSAGES = messages
     return messages
+
+
+_UI_LANGS = ("en", "zh-CN", "de")
 
 
 def get_ui_lang() -> str:
@@ -1376,8 +1379,13 @@ def get_ui_lang() -> str:
     with _state_lock:
         state = load_state()
     lang = state.get("ui_language") or state.get("client_lang") or "en"
-    if isinstance(lang, str) and lang.lower().startswith("zh"):
-        return "zh-CN"
+    if isinstance(lang, str):
+        low = lang.lower()
+        if low.startswith("zh"):
+            return "zh-CN"
+        # German is offered only once its block of strings is filled in.
+        if low.startswith("de") and _load_i18n_messages().get("de"):
+            return "de"
     return "en"
 
 
@@ -4372,17 +4380,17 @@ def api_settings_post():
             state["theme"] = data["theme"]
         if "check_schedule" in data:
             state["check_schedule"] = data["check_schedule"]
-        # Language: ui_language is a manual override (en/zh-CN); null clears it.
+        # Language: ui_language is a manual override (en/zh-CN/de); null clears it.
         # client_lang is a passive browser hint used when ui_language is unset.
         if "ui_language" in data:
             val = data.get("ui_language")
             if val in (None, "", "auto"):
                 state.pop("ui_language", None)
-            elif val in ("en", "zh-CN"):
+            elif val in _UI_LANGS:
                 state["ui_language"] = val
         if "client_lang" in data:
             cl = data.get("client_lang")
-            if cl in ("en", "zh-CN"):
+            if cl in _UI_LANGS:
                 state["client_lang"] = cl
         save_state(state)
     if "check_unused_images" in data and not data["check_unused_images"]:

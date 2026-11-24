@@ -134,6 +134,7 @@
     "settings.lang_auto": "Auto (browser)",
     "settings.lang_en": "English",
     "settings.lang_zh": "中文",
+    "settings.lang_de": "Deutsch",
     "settings.schedule": "Check Schedule",
     "settings.schedule_label": "How often to check for updates",
     "settings.schedule_desc": "Saved here and kept across restarts and updates. The CHECK_TIME environment variable only sets the initial default — once you choose a schedule here, this is what applies.",
@@ -513,6 +514,7 @@
     "settings.lang_auto": "自动（浏览器）",
     "settings.lang_en": "English",
     "settings.lang_zh": "中文",
+    "settings.lang_de": "Deutsch",
     "settings.schedule": "检查计划",
     "settings.schedule_label": "检查更新的频率",
     "settings.schedule_desc": "保存在此处，重启与镜像更新后仍然有效。环境变量 CHECK_TIME 仅作为首次默认值 — 一旦在此选择计划，即以这里为准。",
@@ -756,5 +758,6 @@
     "notify.sys_reboot_title": "{host}：需要重启",
     "notify.sys_security": "其中 {count} 个为安全修复",
     "notify.sys_reboot": "需要重启才能完成。"
-  }
+  },
+  "de": {}
 }

@@ -967,6 +967,7 @@
             <option value="auto" ${langMode==='auto'?'selected':''}>${t('settings.lang_auto')}</option>
             <option value="en" ${langMode==='en'?'selected':''}>${t('settings.lang_en')}</option>
             <option value="zh-CN" ${langMode==='zh-CN'?'selected':''}>${t('settings.lang_zh')}</option>
+            ${I18N.availableLangs().includes('de') ? `<option value="de" ${langMode==='de'?'selected':''}>${t('settings.lang_de')}</option>` : ''}
           </select>
         </div>
       </div>
@@ -2441,7 +2442,7 @@
   // ── Utils ─────────────────────────────────────────────────────────────────
 
   function uiLocale() {
-    return I18N.currentLang === 'zh-CN' ? 'zh-CN' : 'en-AU';
+    return ({ 'zh-CN': 'zh-CN', 'de': 'de-DE' })[I18N.currentLang] || 'en-AU';
   }
 
   function fmtBytes(n) {
