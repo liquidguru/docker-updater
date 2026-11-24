@@ -73,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "2.0.0"
+APP_VERSION          = "2.0.1"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -521,10 +521,30 @@ def _carry_over_hostconfig(hc: dict, hcfg: dict) -> dict:
     return hc
 
 
-def _container_extras(cfg: dict) -> dict:
+def _own_healthcheck(client, cfg: dict, old_image_id: str | None) -> dict | None:
+    """The healthcheck the container carries that its image does not (issue #40):
+    one set in a Compose file or with `docker run --health-*`. `create_container`
+    only falls back to the image's own healthcheck, so this one is lost on a
+    recreate unless it is passed explicitly. A healthcheck that is just the old
+    image's own is left out, so the new image's version of it applies. If the old
+    image cannot be read, the container's own healthcheck is kept to be safe."""
+    hc = cfg.get("Healthcheck")
+    if not hc:
+        return None
+    try:
+        image_hc = client.images.get(old_image_id).attrs.get("Config", {}).get("Healthcheck")
+    except Exception:
+        return hc
+    return None if hc == image_hc else hc
+
+
+def _container_extras(cfg: dict, healthcheck: dict | None = None) -> dict:
     """Container-level settings `create_container` needs beyond the ones passed
-    explicitly: the terminal and stdin flags and the stop signal and timeout."""
+    explicitly: the terminal and stdin flags, the stop signal and timeout, and a
+    healthcheck the image does not supply (see _own_healthcheck)."""
     extras: dict = {}
+    if healthcheck:
+        extras["healthcheck"] = healthcheck
     if cfg.get("Tty"):
         extras["tty"] = True
     if cfg.get("OpenStdin"):
@@ -660,7 +680,7 @@ def _create_backup_clone(client, name: str, cfg: dict, hcfg: dict, nets: dict,
             working_dir=cfg.get("WorkingDir", ""),
             ports=_exposed_ports(cfg) or None,
             host_config=hc, networking_config=nc,
-            **_container_extras(cfg),
+            **_container_extras(cfg, _own_healthcheck(client, cfg, old_image_id)),
         )
         return client.containers.get(tmp)
     except Exception as e:
@@ -1116,7 +1136,7 @@ def _run_self_update_helper() -> None:
             working_dir=cfg.get("WorkingDir", ""),
             ports=_exposed_ports(cfg) or None,
             host_config=hc, networking_config=simple_nc,
-            **_container_extras(cfg),
+            **_container_extras(cfg, spec.get("healthcheck")),
         )
 
         if network_mode != "host" and len(full_nets) > 1:
@@ -2974,6 +2994,8 @@ def apply_update(container_name: str, host_id: str = "local",
         nets        = attrs["NetworkSettings"]["Networks"]
         image_name  = cfg.get("Image", "?")
         old_image_id = attrs.get("Image")
+        # Read now, while the old image can still be looked up (issue #40).
+        _hc_override = _own_healthcheck(client, cfg, old_image_id)
 
         emit(f"Container : {container_name}")
         emit(f"Host      : {host_id}")
@@ -3079,6 +3101,7 @@ def apply_update(container_name: str, host_id: str = "local",
                 "backup_hours": _su_backup_hours,
                 "cleanup_images": _su_cleanup_images,
                 "old_image_id": old_image_id,
+                "healthcheck": _hc_override,
                 "backup_clone": _backup_clone.name if _backup_clone is not None else None,
             })
             _su_spec_b64 = base64.b64encode(_su_spec.encode()).decode()
@@ -3191,7 +3214,7 @@ def apply_update(container_name: str, host_id: str = "local",
                 working_dir=cfg.get("WorkingDir", ""),
                 ports=_exposed_ports(cfg) or None,
                 host_config=hc, networking_config=simple_nc,
-                **_container_extras(cfg),
+                **_container_extras(cfg, _hc_override),
             )
 
             # The primary network (simple_net_name) is already attached at create

@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [2.0.1] — 2026-11-24
+
+### Fixed
+- **A healthcheck set in your Compose file (or with `docker run --health-*`) was lost when docker-updater recreated the container (#40)** — the recreated container fell back to its image's own healthcheck, so for an image without one (such as `redis:alpine`) it ended up with none. A later `docker compose up` then failed with "dependency failed to start: container has no healthcheck configured" for anything using `condition: service_healthy`. The healthcheck is now carried over, in a normal update, in the self-update path and in the rollback backup copy. A healthcheck that is simply the image's own is left alone, so a newer image can still change it. Tested on a real Compose container on Docker 29 / Compose 5.8. Thanks @m0nn3
+
 ## [2.0.0] — 2026-11-24
 
 A major release: for the first time docker-updater also looks at the **machines themselves**, not only the containers on them. I added it because I run four machines on my home network, on different operating systems — one of them a headless Ubuntu server — and wanted an easy way to see what system updates were waiting. Everything new is **off by default and invisible until you switch it on** — nothing is checked or stored and the dashboard has no System tab.

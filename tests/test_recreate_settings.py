@@ -10,6 +10,7 @@ what actually reaches `create_container`.
 import base64
 import json
 import os
+import types
 import unittest
 from unittest import mock
 
@@ -178,6 +179,46 @@ class CarryOverHelperTests(unittest.TestCase):
         """0 means 'kill immediately', which is different from 'not set'."""
         self.assertEqual(self.mod._container_extras({"StopTimeout": 0}),
                          {"stop_timeout": 0})
+
+    # ── healthcheck (issue #40) ──────────────────────────────────────────────
+    HC = {"Test": ["CMD", "redis-cli", "ping"], "Interval": 10_000_000_000,
+          "Timeout": 5_000_000_000, "Retries": 5, "StartPeriod": 20_000_000_000}
+
+    class _Client:
+        def __init__(self, image_hc=None, fail=False):
+            self._hc, self._fail = image_hc, fail
+            outer = self
+
+            class _Images:
+                def get(self, _id):
+                    if outer._fail:
+                        raise RuntimeError("gone")
+                    return types.SimpleNamespace(attrs={"Config": {"Healthcheck": outer._hc}})
+            self.images = _Images()
+
+    def test_a_compose_healthcheck_is_passed_on(self):
+        """The image (redis:alpine) has none, so only the container carries it."""
+        cfg = {"Healthcheck": self.HC}
+        self.assertEqual(self.mod._own_healthcheck(self._Client(None), cfg, "sha256:x"), self.HC)
+        self.assertEqual(self.mod._container_extras(cfg, self.HC), {"healthcheck": self.HC})
+
+    def test_the_images_own_healthcheck_is_left_to_the_new_image(self):
+        cfg = {"Healthcheck": self.HC}
+        self.assertIsNone(self.mod._own_healthcheck(self._Client(dict(self.HC)), cfg, "sha256:x"))
+
+    def test_a_changed_healthcheck_is_kept(self):
+        other = dict(self.HC, Retries=1)
+        self.assertEqual(self.mod._own_healthcheck(self._Client(other), {"Healthcheck": self.HC}, "x"), self.HC)
+
+    def test_a_disabled_healthcheck_is_kept(self):
+        off = {"Test": ["NONE"]}
+        self.assertEqual(self.mod._own_healthcheck(self._Client(self.HC), {"Healthcheck": off}, "x"), off)
+
+    def test_no_healthcheck_means_nothing_is_passed(self):
+        self.assertIsNone(self.mod._own_healthcheck(self._Client(None), {}, "x"))
+
+    def test_unreadable_old_image_keeps_the_containers_healthcheck(self):
+        self.assertEqual(self.mod._own_healthcheck(self._Client(fail=True), {"Healthcheck": self.HC}, "x"), self.HC)
 
 
 if __name__ == "__main__":
