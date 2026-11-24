@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import socket
 import subprocess
 import sys
@@ -72,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "1.18.2"
+APP_VERSION          = "2.0.0"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -2038,12 +2039,563 @@ def _record_notified(delivered: list, active_keys: dict) -> None:
         save_state(state)
 
 
-def check_for_updates(notify: bool = False) -> None:
+# ── System updates (optional; off unless switched on in Settings) ─────────────
+# Package updates for the machines themselves (apt for now), next to the container
+# updates. Each machine is reached over SSH with a restricted key whose forced command
+# is contrib/dock-sysupdate: it can list, fetch a changelog, upgrade and reboot, and
+# nothing else. See README, "System updates".
+# <system-updates>
+
+SYSUPDATE_FILE        = os.path.join(DATA_DIR, "sysupdate_targets.json")
+SYSUPDATE_STATE_DIR   = os.path.join(DATA_DIR, "sysupdate")
+SYSUPDATE_DEFAULT_KEY = "/root/.ssh/sysupdate_ed25519"
+CHECK_SYSTEM_UPDATES  = os.environ.get("CHECK_SYSTEM_UPDATES", "").strip().lower() in (
+    "1", "true", "yes", "on")
+SYS_CHECK_TIMEOUT     = 420      # apt-get update + a simulated upgrade
+SYS_UPGRADE_TIMEOUT   = 3600
+SYS_LOG_LINES         = 2000
+# Both halves must START with a letter or digit: a leading "-" would be read by ssh as an option
+# (-oProxyCommand=...), which is code execution. The command line also puts "--" before it.
+_SYS_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}@[A-Za-z0-9][A-Za-z0-9._-]{0,252}$")
+_SYS_PKG_RE  = re.compile(r"^[a-z0-9][a-z0-9+.\-]{0,99}(:[a-z0-9]{1,16})?$")
+_sys_lock    = threading.Lock()                 # guards _sys_logs and _sys_running
+_sys_logs: dict[str, list[str]] = {}
+_sys_running: set[str] = set()
+
+
+def system_updates_enabled(state: dict | None = None) -> bool:
+    """Off by default. The env var only sets the initial default; a choice
+    saved in Settings wins."""
+    if state is None:
+        with _state_lock:
+            state = load_state()
+    if "check_system_updates" in state:
+        return bool(state["check_system_updates"])
+    return CHECK_SYSTEM_UPDATES
+
+
+def load_sys_targets() -> list:
+    if os.path.exists(SYSUPDATE_FILE):
+        try:
+            with open(SYSUPDATE_FILE) as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception:
+            pass
+    return []
+
+
+def save_sys_targets(targets: list) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(SYSUPDATE_FILE, "w") as f:
+        json.dump(targets, f, indent=2)
+
+
+def _sys_state_path(target_id: str) -> str:
+    return os.path.join(SYSUPDATE_STATE_DIR, f"{target_id}.json")
+
+
+def load_sys_state(target_id: str) -> dict:
+    try:
+        with open(_sys_state_path(target_id)) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_sys_state(target_id: str, st: dict) -> None:
+    os.makedirs(SYSUPDATE_STATE_DIR, exist_ok=True)
+    with open(_sys_state_path(target_id), "w") as f:
+        json.dump(st, f, indent=2, default=str)
+
+
+def _forget_system_updates() -> None:
+    """Switching the option off removes what it stored (the machine list stays,
+    it is configuration), so switching back on announces afresh."""
+    try:
+        for fn in os.listdir(SYSUPDATE_STATE_DIR):
+            if fn.endswith(".json"):
+                os.remove(os.path.join(SYSUPDATE_STATE_DIR, fn))
+    except OSError:
+        pass
+
+
+def _sys_ssh_cmd(target: dict, verb_args: list[str]) -> list[str]:
+    """The ssh command line for one dock-sysupdate verb. No shell is involved on
+    our side, and the remote end only accepts its fixed verbs anyway."""
+    if not _SYS_ADDR_RE.match(str(target.get("address", ""))):     # also guards a hand-edited targets file
+        raise ValueError("invalid machine address")
+    port, key = int(target.get("port") or 22), target.get("key") or SYSUPDATE_DEFAULT_KEY
+    return ["ssh", "-T", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=10", "-p", str(port), "--", target["address"],
+            " ".join(shlex.quote(a) for a in verb_args)]
+
+
+def _sys_run(target: dict, verb_args: list[str], timeout: int) -> tuple[int, str, str]:
+    """Run one verb to completion; (exit code, stdout, stderr)."""
+    r = subprocess.run(_sys_ssh_cmd(target, verb_args), capture_output=True, text=True, timeout=timeout)
+    return r.returncode, r.stdout, r.stderr
+
+
+SYS_REBOOT_GRACE = 15 * 60       # how long a machine we asked to reboot may stay unreachable before it is a fault
+
+
+def _rebooting_recently(st: dict) -> bool:
+    """True while a reboot we asked for is still within its grace period. Without the limit a machine that
+    never came back would read "Rebooting" for ever instead of raising the alarm as offline."""
+    since = st.get("rebooting_since")
+    if not since:
+        return False
+    try:
+        began = datetime.datetime.fromisoformat(str(since).rstrip("Z"))
+    except ValueError:
+        return False
+    return (datetime.datetime.utcnow() - began).total_seconds() < SYS_REBOOT_GRACE
+
+
+DSM_STALE_AFTER = 12 * 3600      # the NAS writes its file from a scheduled task; older than this = it stopped
+
+
+def _syno_vkey(v) -> list[int]:
+    """'7.3.2-86009' / '1.2.3-0456' -> [7, 3, 2, 86009]; compares the way Synology numbers versions."""
+    return [int(x) for x in re.findall(r"\d+", str(v or ""))]
+
+
+def _file_age(data: dict) -> tuple:
+    """(when the machine wrote its status file, whether that is too long ago). The file comes from a
+    scheduled task on the machine, so an old one means the task has stopped."""
+    written = data.get("time") if isinstance(data.get("time"), (int, float)) else None
+    return written, bool(written is not None and time.time() - written > DSM_STALE_AFTER)
+
+
+def _win_normalise(data: dict) -> dict:
+    """The Windows status file -> the same shape an apt machine reports, so the System tab can show it.
+    Read-only, like a Synology: updates are installed in Windows Update itself."""
+    if data.get("error"):
+        raise ValueError(f"the machine could not collect its status: {data['error']}")
+    updates = data.get("updates")
+    if not isinstance(updates, list):
+        raise ValueError("unexpected reply from the machine (is dock-winstatus current?)")
+    pk = []
+    for u in updates:
+        if not isinstance(u, dict):
+            continue
+        title = str(u.get("title") or u.get("kb") or "Windows update")
+        pk.append({"name": title, "from": "", "to": str(u.get("kb") or title), "suites": [],
+                   "security": bool(u.get("security")), "held_back": False,
+                   "reboot_hint": bool(u.get("reboot_hint"))})
+    reasons = [str(r) for r in (data.get("reboot_reasons") or [])]
+    written, stale = _file_age(data)
+    return {"schema": 1, "kind": "windows", "read_only": True, "hostname": data.get("hostname") or "",
+            "os": data.get("os") or "Windows", "kernel": "", "reboot_required": bool(data.get("reboot_required")),
+            "reboot_reasons": reasons, "services_need_restart": [], "unattended_upgrades": None,
+            "packages": pk, "data_time": written, "stale": stale}
+
+
+def _dsm_normalise(data: dict) -> dict:
+    """The Synology status file -> the same shape an apt machine reports, so the System tab can show it.
+    Read-only: `read_only` tells the UI and the API not to offer an Update, and there is no reboot."""
+    if data.get("error"):
+        raise ValueError(f"the NAS could not collect its status: {data['error']}")
+    installed, server = data.get("installed"), data.get("server")
+    if not isinstance(installed, list) or not isinstance(server, list):
+        raise ValueError("unexpected reply from the NAS (is dock-dsmstatus current?)")
+    # A package can be listed several times (a beta beside the stable release). Package Center only offers
+    # beta builds if you opt in, so only stable entries count; a missing `beta` key means stable.
+    latest: dict = {}
+    known: set = set()
+    for e in server:
+        if not isinstance(e, dict) or not e.get("id"):
+            continue
+        known.add(e["id"])
+        if e.get("beta"):
+            continue
+        best = latest.get(e["id"])
+        if best is None or _syno_vkey(e.get("version")) > _syno_vkey(best.get("version")):
+            latest[e["id"]] = e
+    pk = []
+    unchecked = []                       # installed, but in no package source DSM could see
+    raw_dsm = data.get("dsm")
+    dsm: dict = raw_dsm if isinstance(raw_dsm, dict) else {}
+    if dsm.get("available"):
+        to = dsm.get("version") or dsm.get("version_string") or ""
+        pk.append({"name": "DSM", "from": data.get("os") or "", "to": str(to) or "new version",
+                   "suites": [], "security": False, "held_back": False, "reboot_hint": False})
+    for p in installed:
+        if not isinstance(p, dict):
+            continue
+        new = latest.get(p.get("id"))
+        if not new and p.get("id") not in known:        # only a beta on offer = checked, nothing stable newer
+            unchecked.append(str(p.get("name") or p.get("id")))
+        if new and _syno_vkey(new.get("version")) > _syno_vkey(p.get("version")):
+            pk.append({"name": str(p.get("name") or new.get("dname") or p["id"]),
+                       "from": str(p.get("version") or ""), "to": str(new.get("version")),
+                       "suites": [], "security": bool(new.get("is_security_version")),
+                       "held_back": False, "reboot_hint": False})
+    written, stale = _file_age(data)
+    return {"schema": 1, "kind": "dsm", "read_only": True, "hostname": data.get("hostname") or "",
+            "os": data.get("os") or "DSM", "kernel": "", "reboot_required": False, "reboot_reasons": [],
+            "services_need_restart": [], "unattended_upgrades": None, "packages": pk,
+            "unchecked": unchecked, "data_time": written, "stale": stale}
+
+
+def _sys_parse_status(stdout: str) -> dict:
+    data = json.loads(stdout)
+    if isinstance(data, dict) and data.get("schema") == 1 and data.get("kind") == "dsm":
+        return _dsm_normalise(data)
+    if isinstance(data, dict) and data.get("schema") == 1 and data.get("kind") == "windows":
+        return _win_normalise(data)
+    if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("packages"), list):
+        raise ValueError("unexpected reply from the machine (is dock-sysupdate current?)")
+    # Names come from the remote machine and end up in buttons and in the commands sent back, so only
+    # well-formed Debian package names are kept.
+    data["packages"] = [p for p in data["packages"]
+                        if isinstance(p, dict) and isinstance(p.get("name"), str) and _SYS_PKG_RE.match(p["name"])]
+    return data
+
+
+def _sys_fingerprint(info: dict) -> str:
+    """What 'already told you' means: the exact set of versions on offer, plus
+    whether a reboot is pending. Empty when there is nothing to announce."""
+    pk = sorted(f"{p.get('name')}={p.get('to')}" for p in info.get("packages", []))
+    if info.get("reboot_required"):
+        pk.append("REBOOT")
+    return "|".join(pk)
+
+
+def check_system_target(target: dict, refresh: bool = True) -> dict:
+    """Ask one machine for its state and store it. Never raises."""
+    tid = target["id"]
+    st = load_sys_state(tid)
+    try:
+        # `refresh` asks the machine for fresh data: apt-get update on Linux, and on Windows "run your
+        # scheduled status task now, then print the file". A Synology has no such verb - its key can only
+        # print the file its own root task wrote - so it always gets `status`.
+        verb = "refresh" if refresh and target.get("kind", "apt") in ("apt", "windows") else "status"
+        rc, out, err = _sys_run(target, [verb], SYS_CHECK_TIMEOUT)
+        if rc != 0:
+            raise RuntimeError((err or out).strip()[-300:] or f"exit status {rc}")
+        st["info"] = _sys_parse_status(out)
+        st["status"] = "online"
+        st.pop("last_error", None)
+        st.pop("rebooting_since", None)
+    except subprocess.TimeoutExpired:
+        st["status"], st["last_error"] = "offline", "timed out"
+    except Exception as e:
+        # A machine we just asked to reboot is expected to be unreachable for a bit.
+        st["status"] = "rebooting" if _rebooting_recently(st) else "offline"
+        if st["status"] == "offline":
+            st.pop("rebooting_since", None)
+        st["last_error"] = str(e)
+    st["last_check"] = datetime.datetime.utcnow().isoformat() + "Z"
+    save_sys_state(tid, st)
+    return st
+
+
+def _sys_notification(target: dict, info: dict) -> tuple[str, str]:
+    pk = info.get("packages", [])
+    n, sec = len(pk), sum(1 for p in pk if p.get("security"))
+    host = target.get("name") or info.get("hostname") or target["id"]
+    if n:
+        title = ui_t("notify.sys_title_plural" if n != 1 else "notify.sys_title", host=host, count=n)
+    else:
+        title = ui_t("notify.sys_reboot_title", host=host)
+    lines = [", ".join(p["name"] for p in pk[:12]) + (" …" if n > 12 else "")] if n else []
+    if sec:
+        lines.append(ui_t("notify.sys_security", count=sec))
+    if info.get("reboot_required"):
+        lines.append(ui_t("notify.sys_reboot"))
+    return title, "\n".join(lines)
+
+
+def check_system_updates(notify: bool = False) -> None:
+    """Check every machine; on a notifying check, announce each machine's set of
+    updates once (and a pending reboot), not on every run."""
+    for target in load_sys_targets():
+        try:
+            st = check_system_target(target)
+            info = st.get("info") or {}
+            fp = _sys_fingerprint(info) if st.get("status") == "online" else None
+            print(f"[checker:sys:{target['id']}] {st.get('status')} — "
+                  f"{len(info.get('packages', []))} package update(s)"
+                  + (", reboot pending" if info.get("reboot_required") else ""))
+            if fp is None:
+                continue
+            if not fp:
+                if st.pop("notified_fp", None) is not None:
+                    save_sys_state(target["id"], st)
+                continue
+            if notify and st.get("notified_fp") != fp:
+                title, body = _sys_notification(target, info)
+                if send_notification(title=title, body=body):
+                    st["notified_fp"] = fp
+                    save_sys_state(target["id"], st)
+        except Exception as e:
+            print(f"[checker:sys:{target.get('id')}] failed: {e}")
+
+
+_sys_check_lock = threading.Lock()
+_sys_check_thread: threading.Thread | None = None
+
+
+def _run_system_check(notify: bool) -> None:
+    # A notifying (scheduled) run waits its turn so its announcement is not lost; a manual run that
+    # finds one already going simply lets it finish.
+    if not _sys_check_lock.acquire(blocking=notify):
+        return
+    try:
+        check_system_updates(notify=notify)
+    except Exception as e:
+        print(f"[checker:sys] failed: {e}")
+    finally:
+        _sys_check_lock.release()
+
+
+def system_check_running() -> bool:
+    t = _sys_check_thread
+    return _sys_check_lock.locked() or bool(t and t.is_alive())
+
+
+def start_system_check(notify: bool = False) -> threading.Thread:
+    """Run the System check in the background, independent of the container check."""
+    global _sys_check_thread
+    t = threading.Thread(target=_run_system_check, args=(notify,), daemon=True)
+    _sys_check_thread = t
+    t.start()
+    return t
+
+
+def _sys_view() -> list:
+    """What /api/status reports for the System tab."""
+    out = []
+    with _sys_lock:
+        running = set(_sys_running)
+    for t in load_sys_targets():
+        st = load_sys_state(t["id"])
+        out.append({"id": t["id"], "name": t["name"], "address": t["address"], "kind": t.get("kind", "apt"),
+                    "status": st.get("status", "unknown"), "last_check": st.get("last_check"),
+                    "last_error": st.get("last_error"), "info": st.get("info"),
+                    "updating": t["id"] in running})
+    return out
+
+
+def _sys_target_or_404(target_id: str):
+    t = next((x for x in load_sys_targets() if x["id"] == target_id), None)
+    if t is None:
+        return None, (jsonify({"error": "Machine not found"}), 404)
+    return t, None
+
+
+def _run_system_upgrade(target: dict, pkgs: list[str]) -> None:
+    """Worker thread: stream the upgrade into the log, then re-read the machine."""
+    tid = target["id"]
+
+    def log(line: str) -> None:
+        with _sys_lock:
+            lines = _sys_logs.setdefault(tid, [])
+            lines.append(line)
+            del lines[:-SYS_LOG_LINES]
+
+    rc = -1
+    try:
+        log(f"▶ {', '.join(pkgs) if pkgs != ['all'] else 'all upgradable packages'}")
+        p = subprocess.Popen(_sys_ssh_cmd(target, ["upgrade"] + pkgs), stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True)
+        killer = threading.Timer(SYS_UPGRADE_TIMEOUT, p.kill)
+        killer.start()
+        try:
+            assert p.stdout is not None
+            for line in p.stdout:
+                log(line.rstrip())
+            rc = p.wait()
+        finally:
+            killer.cancel()
+        log("✔ finished" if rc == 0 else f"✘ failed (exit status {rc})")
+    except Exception as e:
+        log(f"✘ {e}")
+    finally:
+        try:
+            check_system_target(target, refresh=False)
+        except Exception as e:
+            log(f"✘ could not re-read the machine: {e}")
+        with _sys_lock:
+            _sys_running.discard(tid)
+
+
+@app.before_request
+def _sysupdate_off_means_absent():
+    """While the option is off every /api/sysupdate/* endpoint answers 404 — as if the feature did not
+    exist — so nothing can be added, run, or rebooted until it is switched on in Settings."""
+    if (request.path or "").startswith("/api/sysupdate/") and not system_updates_enabled():
+        return jsonify({"error": "Not found"}), 404
+    return None
+
+
+@app.route("/api/sysupdate/targets", methods=["GET"])
+def api_sysupdate_targets():
+    return jsonify({"enabled": system_updates_enabled(), "targets": _sys_view()})
+
+
+@app.route("/api/sysupdate/targets", methods=["POST"])
+def api_sysupdate_add():
+    data = request.get_json() or {}
+    name = str(data.get("name", "")).strip()
+    address = str(data.get("address", "")).strip()
+    key = str(data.get("key") or SYSUPDATE_DEFAULT_KEY).strip()
+    raw_port = data.get("port")
+    try:
+        port = 22 if raw_port in (None, "") else int(raw_port)
+    except (TypeError, ValueError):
+        return jsonify({"error": "port must be a number"}), 400
+    kind = str(data.get("kind") or "apt")
+    if kind not in ("apt", "dsm", "windows"):
+        return jsonify({"error": "kind must be apt, dsm or windows"}), 400
+    if not name or not address:
+        return jsonify({"error": "name and address are required"}), 400
+    if not _SYS_ADDR_RE.match(address) or not 1 <= port <= 65535 or not key.startswith("/"):
+        return jsonify({"error": "address must look like user@host (letters, digits, . _ -), "
+                                 "port 1-65535, key an absolute path"}), 400
+    targets = load_sys_targets()
+    tid = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")[:32] or "machine"
+    existing, base, i = {t["id"] for t in targets}, tid, 1
+    while tid in existing:
+        tid = f"{base}-{i}"; i += 1
+    targets.append({"id": tid, "name": name, "address": address, "port": port, "key": key, "kind": kind})
+    save_sys_targets(targets)
+    return jsonify({"ok": True, "id": tid})
+
+
+@app.route("/api/sysupdate/targets/<target_id>", methods=["DELETE"])
+def api_sysupdate_delete(target_id):
+    save_sys_targets([t for t in load_sys_targets() if t["id"] != target_id])
+    try:
+        os.remove(_sys_state_path(target_id))
+    except OSError:
+        pass
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sysupdate/targets/<target_id>/test", methods=["POST"])
+def api_sysupdate_test(target_id):
+    t, err = _sys_target_or_404(target_id)
+    if err:
+        return err
+    assert t is not None
+    accepted = False
+    try:
+        rc, out, e = _sys_run(t, ["status"], 120)
+        if rc != 0 and "Host key verification failed" in e:
+            # Trust on first use, exactly as for Docker hosts.
+            if _ssh_keyscan_and_accept(f"ssh://{t['address']}:{t.get('port') or 22}"):
+                accepted = True
+                rc, out, e = _sys_run(t, ["status"], 120)
+        if rc != 0:
+            return jsonify({"ok": False, "error": (e or out).strip()[-300:] or f"exit status {rc}"})
+        info = _sys_parse_status(out)
+        return jsonify({"ok": True, "os": info.get("os"), "hostname": info.get("hostname"),
+                        "packages": len(info["packages"]), "accepted_key": accepted})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)})
+
+
+@app.route("/api/sysupdate/check", methods=["POST"])
+def api_sysupdate_check():
+    if not system_updates_enabled():
+        return jsonify({"error": "System updates are switched off in Settings."}), 400
+    start_system_check(notify=False)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sysupdate/<target_id>/upgrade", methods=["POST"])
+def api_sysupdate_upgrade(target_id):
+    t, err = _sys_target_or_404(target_id)
+    if err:
+        return err
+    assert t is not None
+    if t.get("kind", "apt") != "apt":
+        return jsonify({"error": "This machine is read-only here - install its updates on the machine itself "
+                                 "(DSM, or Windows Update)."}), 400
+    pkgs = (request.get_json() or {}).get("packages")
+    if pkgs != "all":
+        if not isinstance(pkgs, list) or not pkgs or len(pkgs) > 200 or \
+                not all(isinstance(p, str) and _SYS_PKG_RE.match(p) for p in pkgs):
+            return jsonify({"error": "packages must be \"all\" or a list of package names"}), 400
+    wanted = ["all"] if pkgs == "all" else list(pkgs)
+    with _sys_lock:
+        if target_id in _sys_running:
+            return jsonify({"error": "Already updating"}), 409
+        _sys_running.add(target_id)
+        _sys_logs[target_id] = []
+    threading.Thread(target=_run_system_upgrade, args=(t, wanted), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/sysupdate/<target_id>/log", methods=["GET"])
+def api_sysupdate_log(target_id):
+    with _sys_lock:
+        return jsonify({"running": target_id in _sys_running, "lines": list(_sys_logs.get(target_id, []))})
+
+
+@app.route("/api/sysupdate/<target_id>/changelog/<pkg>", methods=["GET"])
+def api_sysupdate_changelog(target_id, pkg):
+    t, err = _sys_target_or_404(target_id)
+    if err:
+        return err
+    assert t is not None
+    if t.get("kind", "apt") != "apt":
+        return jsonify({"error": "This machine is read-only here - install its updates on the machine itself "
+                                 "(DSM, or Windows Update)."}), 400
+    if not _SYS_PKG_RE.match(pkg):
+        return jsonify({"error": "invalid package name"}), 400
+    try:
+        rc, out, e = _sys_run(t, ["changelog", pkg], 90)
+        return jsonify({"ok": rc == 0, "text": (out or e).strip()[:20000]})
+    except Exception as ex:
+        return jsonify({"ok": False, "text": str(ex)})
+
+
+@app.route("/api/sysupdate/<target_id>/reboot", methods=["POST"])
+def api_sysupdate_reboot(target_id):
+    t, err = _sys_target_or_404(target_id)
+    if err:
+        return err
+    assert t is not None
+    if t.get("kind", "apt") != "apt":
+        return jsonify({"error": "This machine is read-only here - install its updates on the machine itself "
+                                 "(DSM, or Windows Update)."}), 400
+    if (request.get_json() or {}).get("confirm") is not True:
+        return jsonify({"error": "Rebooting needs {\"confirm\": true}."}), 400
+    with _sys_lock:
+        if target_id in _sys_running:
+            return jsonify({"error": "An update is running; wait for it to finish."}), 409
+    try:
+        rc, out, e = _sys_run(t, ["reboot"], 60)
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 200
+    if rc != 0:
+        return jsonify({"ok": False, "error": (e or out).strip()[-300:]}), 200
+    st = load_sys_state(target_id)
+    st["rebooting_since"] = datetime.datetime.utcnow().isoformat() + "Z"
+    st["status"] = "rebooting"
+    st.pop("notified_fp", None)
+    save_sys_state(target_id, st)
+    return jsonify({"ok": True})
+
+# </system-updates>
+
+
+def check_for_updates(notify: bool = False, include_system: bool = True) -> None:
     global _check_running
     if not _check_lock.acquire(blocking=False):
         return
     _check_running = True
     print(f"[checker] Starting digest check (notify={notify})...")
+    # System (OS package) updates — optional, announced separately. Started HERE, at the beginning, in
+    # its own thread with its own lock, so the two run side by side: an `apt-get update` on a slow or
+    # unreachable machine can never hold up the container check, its banner or its notification.
+    if include_system and system_updates_enabled():
+        start_system_check(notify=notify)
 
     # Collect all updates for notification: (host_label, container_name,
     # notified-key, remote_digest). The key/digest let "only notify about new
@@ -3566,12 +4118,20 @@ def api_status():
     # tell the feature exists until it has been switched on.
     if unused_images_enabled(state):
         payload["unused_images"] = _unused_images_view(state, remote_hosts_info)
+    # likewise absent while the option is off. Also withheld from the read-only API key: it is meant for
+    # a status widget, and which machines you manage, what they run and their pending security fixes
+    # are not that. Only a logged-in session (or an instance with no login at all) sees it.
+    if system_updates_enabled(state) and (not AUTH_ENABLED or session.get("authenticated")):
+        payload["system_updates"] = _sys_view()
+        payload["system_updates_open"] = not AUTH_ENABLED   # the UI warns when anyone can reach this
+        payload["system_check_running"] = system_check_running()
     return jsonify(payload)
 
 
 @app.route("/api/check", methods=["POST"])
 def api_check():
-    threading.Thread(target=check_for_updates, args=(False,), daemon=True).start()
+    # The dashboard's Docker button checks containers only; the System tab has its own button.
+    threading.Thread(target=check_for_updates, args=(False, False), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -3729,6 +4289,7 @@ def api_settings_get():
         "cleanup_images": state.get("cleanup_images", False),
         "notify_new_only": state.get("notify_new_only", False),
         "check_unused_images": unused_images_enabled(state),
+        "check_system_updates": system_updates_enabled(state),
         "check_images_without_digest": images_without_digest_enabled(state),
         "theme":          state.get("theme", DEFAULT_THEME),
         "themes":         THEMES,
@@ -3773,6 +4334,10 @@ def api_settings_post():
             state["check_unused_images"] = bool(data["check_unused_images"])
             if not state["check_unused_images"]:
                 _forget_unused_images(state)
+        if "check_system_updates" in data:
+            state["check_system_updates"] = bool(data["check_system_updates"])
+            if not state["check_system_updates"]:
+                _forget_system_updates()
         if "theme" in data and data["theme"] in THEMES:
             state["theme"] = data["theme"]
         if "check_schedule" in data:

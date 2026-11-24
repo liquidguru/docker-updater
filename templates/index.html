@@ -130,6 +130,24 @@
   .images-note { font-size:12.5px; line-height:1.5; color:var(--muted); background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 14px; margin-bottom:12px; }
   .images-pull { margin-top:3px; font-size:12px; color:var(--muted); }
   .images-pull code { font-family:monospace; background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:1px 6px; color:var(--text); user-select:all; }
+  .badge-security { background:color-mix(in srgb, var(--red) 14%, transparent); color:var(--red); border:1px solid color-mix(in srgb, var(--red) 30%, transparent); }
+  .sys-machine { margin-bottom:22px; }
+  .sys-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:4px 0 8px; }
+  .sys-head h3 { margin:0; font-size:15px; }
+  .sys-title { display:flex; align-items:center; gap:10px; flex-wrap:wrap; cursor:pointer; user-select:none; }
+  .sys-title:hover h3 { text-decoration:underline; }
+  .sys-chev { width:12px; color:var(--muted); font-size:12px; }
+  .sys-sub { color:var(--muted); font-size:12px; }
+  .sys-banner { font-size:13px; border-radius:8px; padding:9px 14px; margin-bottom:10px; border:1px solid var(--border); background:var(--surface); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .sys-banner.warn { border-color:color-mix(in srgb, var(--orange) 40%, transparent); background:color-mix(in srgb, var(--orange) 9%, transparent); }
+  .sys-banner.bad  { border-color:color-mix(in srgb, var(--red) 40%, transparent); background:color-mix(in srgb, var(--red) 9%, transparent); }
+  .sys-log-head { display:flex; align-items:center; justify-content:space-between; margin-top:10px; }
+  .sys-log-head + .sys-log { margin-top:4px; }
+  .sys-log { scrollbar-color:var(--border) transparent; margin-top:10px; max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; background:var(--surface); font-family:'Cascadia Code','Fira Code',Consolas,monospace; font-size:12px; line-height:1.5; padding:10px 12px; white-space:pre-wrap; word-break:break-all; }
+  .host-chip a { color:var(--fg); text-decoration:underline; opacity:.85; }
+  .host-chip a:hover { opacity:1; }
+  .sys-form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px; }
+  .sys-form input { padding:7px 10px; border:1px solid var(--border); border-radius:6px; background:var(--input-bg,var(--bg)); color:var(--fg); font-size:13px; }
   .card-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
 
   .host-chip { display:inline-flex; align-items:center; gap:3px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:1px 7px; font-size:10px; color:var(--muted); white-space:nowrap; }
@@ -250,6 +268,8 @@
   .badge-rollback { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; background:color-mix(in srgb, var(--purple) 12%, transparent); color:var(--purple); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); }
 
   #checking-banner.visible { display:flex; }
+  #sys-checking-banner { display:none; background:color-mix(in srgb, var(--blue) 8%, transparent); border:1px solid color-mix(in srgb, var(--blue) 20%, transparent); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--blue); align-items:center; gap:8px; }
+  #sys-checking-banner.visible { display:flex; }
   #notify-banner { display:none; background:color-mix(in srgb, var(--green) 8%, transparent); border:1px solid color-mix(in srgb, var(--green) 25%, transparent); border-radius:8px; padding:10px 16px; margin-bottom:12px; font-size:13px; color:var(--green); align-items:center; gap:10px; flex-wrap:wrap; }
   #notify-banner.visible { display:flex; }
   @media (max-width: 640px) {
@@ -278,7 +298,7 @@
     <div class="header-stats" id="header-stats"></div>
     <div class="header-right">
       <span class="last-check" id="last-check-label">—</span>
-      <button class="btn-check" id="check-btn" onclick="triggerCheck()" data-i18n="btn.check_now">Check Now</button>
+      <button class="btn-check" id="check-btn" onclick="triggerCheck()">Check Now</button>
       <form id="logout-form" method="post" action="/logout" style="display:{{ '' if auth_enabled else 'none' }};margin:0">
         <button type="submit" class="btn-secondary btn-sm" data-i18n="btn.logout">Log out</button>
       </form>
@@ -294,12 +314,14 @@
   <button class="tab"        data-tab="unknown"  onclick="switchTab('unknown')"><span data-i18n="tab.unchecked">Unchecked</span> <span class="badge" id="tab-count-unknown">0</span></button>
   <button class="tab"        data-tab="all"      onclick="switchTab('all')"><span data-i18n="tab.all">All</span> <span class="badge" id="tab-count-all">0</span></button>
   <button class="tab"        data-tab="images"   id="tab-images" style="display:none" onclick="switchTab('images')"><span data-i18n="tab.images">Images</span> <span class="badge" id="tab-count-images">0</span></button>
+  <button class="tab"        data-tab="system"   id="tab-system" style="display:none" onclick="switchTab('system')"><span data-i18n="tab.system">System</span> <span class="badge" id="tab-count-system">0</span></button>
   <button class="tab"        data-tab="hosts"    onclick="switchTab('hosts')"><span data-i18n="tab.hosts">Hosts</span> <span class="badge" id="tab-count-hosts">0</span></button>
   <button class="tab"        data-tab="settings" onclick="switchTab('settings')" data-i18n="tab.settings">Settings</button>
 </div>
 
 <main>
   <div id="checking-banner"><span class="spinner"></span> <span data-i18n="banner.checking">Checking for updates…</span></div>
+  <div id="sys-checking-banner"><span class="spinner"></span> <span data-i18n="banner.sys_checking">Checking system updates…</span></div>
 
   <div id="notify-banner">
     <span>📱 <strong data-i18n="banner.notify_prefix">Subscribe for push notifications:</strong></span>
@@ -323,6 +345,7 @@
 
   <div id="backups-panel" style="display:none"></div>
   <div id="images-panel" style="display:none"></div>
+  <div id="system-panel" style="display:none"></div>
   <div id="settings-panel" style="display:none"></div>
 
   <div class="section-title" id="history-title" data-i18n="history.title">Recent Updates</div>
@@ -404,6 +427,20 @@
   </div>
 </div>
 
+<!-- System package changelog modal -->
+<div class="modal-overlay" id="sys-modal-overlay" onclick="closeSysModal(event)">
+  <div class="modal" style="width:min(760px,95vw)">
+    <div class="modal-header">
+      <h3 id="sys-modal-title"></h3>
+      <button class="btn-ghost" onclick="closeSysModal()" style="margin-left:auto" data-i18n-title="btn.close_dialog" data-i18n-aria-label="btn.close_dialog" aria-label="Close dialog">✕</button>
+    </div>
+    <div class="modal-body"><div class="log-output" id="sys-modal-text" style="max-height:520px;overflow-y:auto"></div></div>
+    <div class="modal-footer">
+      <button class="btn-secondary btn-sm" onclick="closeSysModal()" data-i18n="btn.close">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="changelog-modal-overlay" onclick="closeChangelogModal(event)">
   <div class="modal" style="width:min(760px,95vw)">
     <div class="modal-header">
@@ -427,6 +464,7 @@
   let allImages = null;    // unused images; null while that option is off, so the page has no trace of it
   let multiHost = false;   // true when >1 host configured
   let currentTab = 'update';
+  let checkRunning = false, sysCheckRunning = false;   // container check / system check, tracked apart
   let selectedNames = new Set();
   let cancellingKeys = new Set();   // container keys with a cancel request in flight
   let activePulls = {};             // `host:container` -> latest entry from /api/pulls
@@ -441,7 +479,7 @@
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false, check_unused_images: false, check_images_without_digest: false };
+  let _settings = { backup_enabled: false, backup_hours: 24, restart_stack: false, cleanup_images: false, notify_new_only: false, check_unused_images: false, check_system_updates: false, check_images_without_digest: false };
 
   async function loadSettings() {
     try {
@@ -502,17 +540,21 @@
     const notifyNewOnly  = document.getElementById('notify-new-only')?.checked || false;
     const checkUnused    = document.getElementById('check-unused')?.checked || false;
     const unusedChanged  = checkUnused !== !!_settings.check_unused_images;
+    const checkSystem    = document.getElementById('check-system')?.checked || false;
+    const systemChanged  = checkSystem !== !!_settings.check_system_updates;
     const checkWithoutDigest = document.getElementById('check-without-digest')?.checked || false;
     const withoutDigestChanged = checkWithoutDigest !== !!_settings.check_images_without_digest;
     const schedule = collectSchedule();
     _settings = { ..._settings, backup_enabled: enabled, backup_hours: hours,
                   restart_stack: restartStack, cleanup_images: cleanupImages,
                   notify_new_only: notifyNewOnly, check_unused_images: checkUnused,
+                  check_system_updates: checkSystem,
                   check_images_without_digest: checkWithoutDigest };
     if (schedule) _settings.check_schedule = schedule;
     const payload = { backup_enabled: enabled, backup_hours: hours,
       restart_stack: restartStack, cleanup_images: cleanupImages,
       notify_new_only: notifyNewOnly, check_unused_images: checkUnused,
+      check_system_updates: checkSystem,
       check_images_without_digest: checkWithoutDigest };
     if (schedule) payload.check_schedule = schedule;
     const r = await fetch('/api/settings', { method:'POST', headers:{'Content-Type':'application/json'},
@@ -525,6 +567,7 @@
       if (el) el.style.color = '';
       renderNextCheck(d.next_check);
       if (unusedChanged) fetchStatus();   // show or remove the Images tab right away
+      if (systemChanged) fetchStatus();   // likewise the System tab
       if (withoutDigestChanged) fetchStatus();
     }
     document.getElementById('backup-options').style.display = enabled ? '' : 'none';
@@ -566,6 +609,305 @@
 
   function renderImagesPanel() {
     document.getElementById('images-panel').innerHTML = imagesPanelHtml(allImages || [], multiHost);
+  }
+
+  // <system-updates>
+  // Package updates for the machines themselves (optional; the tab exists only
+  // while the option is on). Rendering is plain functions of their inputs so
+  // tests/test_ui_system_updates.py can run them under node.
+  let allSystemOpen = false;  // true when the dashboard has no login at all
+  let allSystem = null;       // null while the option is off, so the page has no trace of it
+  // Which machine cards are folded away. Kept in this browser only (a per-viewer convenience), and the
+  // page works the same when storage is blocked.
+  function sysLoadCollapsed() {
+    try { return JSON.parse(localStorage.getItem('du.sys.collapsed') || '[]'); } catch (e) { return []; }
+  }
+  let sysCollapsed = new Set(sysLoadCollapsed());
+  function sysToggle(id) {
+    if (sysCollapsed.has(id)) sysCollapsed.delete(id); else sysCollapsed.add(id);
+    try { localStorage.setItem('du.sys.collapsed', JSON.stringify([...sysCollapsed])); } catch (e) {}
+    if (typeof renderSystemPanel === 'function') renderSystemPanel();
+  }
+  // The "no login" banner can be put away. Remembered in this browser only; the page works the same when
+  // storage is blocked (the banner then simply comes back next time).
+  function sysLoadOpenDismissed() {
+    try { return localStorage.getItem('du.sys.noLoginDismissed') === '1'; } catch (e) { return false; }
+  }
+  let sysOpenDismissed = sysLoadOpenDismissed();
+  function sysDismissOpenWarning() {
+    sysOpenDismissed = true;
+    try { localStorage.setItem('du.sys.noLoginDismissed', '1'); } catch (e) {}
+    if (typeof renderSystemPanel === 'function') renderSystemPanel();
+  }
+  let sysLogs = {};           // machine id -> lines of its last update run
+  let sysFetchedLog = {};     // machine ids whose stored log has been fetched once
+
+  // A value for a single-quoted JS string inside a double-quoted onclick attribute. JSON escaping
+  // covers backslash, quotes and control characters; the apostrophe is added by hand because HTML
+  // decoding happens BEFORE the script is parsed, so a plain esc() would let a ' end the string.
+  function sysArg(s) {
+    return "'" + esc(JSON.stringify(String(s)).slice(1, -1).replace(/'/g, '\\u0027')) + "'";
+  }
+
+  function sysPendingCount(machines) {
+    return (machines || []).reduce((n, m) => n + ((m.info && m.info.packages) ? m.info.packages.length : 0), 0);
+  }
+
+  function sysPkgRowHtml(m, p) {
+    const name = esc(p.name), idArg = sysArg(m.id), nameArg = sysArg(p.name);
+    const badges = [
+      p.security    ? `<span class="badge-status badge-security">${t('sys.badge_security')}</span>` : '',
+      p.reboot_hint ? `<span class="badge-status badge-updating" title="${esc(t('sys.badge_reboot_title'))}">${t('sys.badge_reboot')}</span>` : '',
+      p.held_back   ? `<span class="badge-status badge-unknown" title="${esc(t('sys.held_note'))}">${t('sys.badge_held')}</span>` : '',
+    ].filter(Boolean).join(' ');
+    const off = (m.updating || p.held_back) ? 'disabled' : '';
+    return `<div class="container-card status-update">
+      <div class="card-info">
+        <div class="card-name">${name}</div>
+        <div class="card-meta">${p.from ? esc(p.from) + ' → ' + esc(p.to) : esc(p.to)}</div>
+      </div>
+      <div class="card-actions">${badges}${m.kind !== 'apt'
+        ? `<span class="sys-sub">${t(m.kind === 'windows' ? 'sys.update_in_windows' : 'sys.update_in_dsm')}</span>`
+        : `<button class="btn-ghost btn-sm" onclick="sysChangelog(${idArg},${nameArg})">${t('btn.sys_changes')}</button>
+        <button class="btn-primary btn-sm" ${off} onclick="sysUpdate(${idArg},${nameArg})">${t('btn.update')}</button>`}
+      </div>
+    </div>`;
+  }
+
+  function sysMachineHtml(m, logLines) {
+    const id = esc(m.id), idArg = sysArg(m.id), info = m.info || {}, pk = info.packages || [];
+    const dsm = m.kind === 'dsm';
+    const ro = m.kind !== 'apt';         // a Synology NAS or a Windows PC: read-only, no apt, no reboot from here
+    const installable = ro ? 0 : pk.filter(p => !p.held_back).length;
+    const checked = m.last_check ? t('card.checked', {when: timeAgo(m.last_check)}) : t('card.not_checked');
+    const osLine = info.os ? (ro ? esc(info.os) : esc(t('sys.os_line', {os: info.os, kernel: info.kernel || '?'}))) : '';
+    const unattended = (info.os && !ro) ? (info.unattended_upgrades ? t('sys.unattended_on') : t('sys.unattended_off')) : '';
+    // Before installing: will this need a reboot? A guess by package name (kernels and core libraries);
+    // the machine's own answer is the banner below, which appears once something is installed.
+    const rebootPkgs = pk.filter(p => p.reboot_hint && !p.held_back).map(p => p.name);
+    const rebootLine = (!ro && m.status === 'online' && pk.length && !info.reboot_required)
+      ? (rebootPkgs.length
+          ? `<div class="sys-sub" style="margin-bottom:8px;color:var(--orange)">⚠️ ${esc(t('sys.reboot_maybe', {pkgs: rebootPkgs.join(', ')}))}</div>`
+          : `<div class="sys-sub" style="margin-bottom:8px;color:var(--green)">✓ ${esc(t('sys.reboot_none'))}</div>`)
+      : '';
+    const banners = [];
+    if (m.status === 'rebooting') {
+      banners.push(`<div class="sys-banner warn"><span class="spinner"></span> ${t('sys.rebooting')}</div>`);
+    } else if (m.status === 'offline') {
+      banners.push(`<div class="sys-banner bad">⚠️ ${esc(t('sys.offline', {err: m.last_error || '?'}))}</div>`);
+    }
+    if (info.reboot_required && m.status !== 'rebooting') {
+      const why = (info.reboot_reasons || []).length ? ' ' + esc(t('sys.reboot_why', {pkgs: info.reboot_reasons.join(', ')})) : '';
+      // No Reboot button for a machine that is only checked: the banner just says it is needed.
+      banners.push(`<div class="sys-banner warn"><strong>${t('sys.reboot_required')}</strong>${why}${ro ? '' : `
+        <button class="btn-secondary btn-sm" style="margin-left:auto" ${m.updating ? 'disabled' : ''}
+          onclick="sysReboot(${idArg})">${t('btn.sys_reboot')}</button>`}</div>`);
+    }
+    if (ro && m.status === 'online') {
+      banners.push(`<div class="sys-banner">${t(dsm ? 'sys.dsm_readonly' : 'sys.win_readonly')}</div>`);
+      if ((info.unchecked || []).length) banners.push(`<div class="sys-banner warn" title="${esc(info.unchecked.join(', '))}">${esc(t('sys.dsm_unchecked', {n: info.unchecked.length}))}</div>`);
+      if (info.stale) banners.push(`<div class="sys-banner warn">⚠️ ${esc(t(dsm ? 'sys.dsm_stale' : 'sys.win_stale'))}</div>`);
+    }
+    if ((info.services_need_restart || []).length) {
+      banners.push(`<div class="sys-banner">${esc(t('sys.restart_services', {names: info.services_need_restart.join(', ')}))}</div>`);
+    }
+    const rows = pk.length
+      ? pk.map(p => sysPkgRowHtml(m, p)).join('')
+      : (m.status === 'online' ? `<div class="empty" style="padding:14px"><span class="emoji">✅</span><strong>${t('sys.none_pending')}</strong></div>` : '');
+    const all = installable
+      ? `<button class="btn-primary btn-sm" ${m.updating ? 'disabled' : ''} onclick="sysUpdateAll(${idArg}, ${installable})">${t('btn.sys_update_all', {n: installable})}</button>` : '';
+    const busy = m.updating ? `<span class="badge-status badge-updating"><span class="spinner"></span> ${t('badge.updating')}</span>` : '';
+    const log = (logLines && logLines.length)
+      ? `<div class="sys-log-head"><span class="sys-sub">${t('sys.log_title')}</span>
+          <button class="btn-ghost btn-sm" ${m.updating ? 'disabled' : ''} onclick="sysHideLog(${idArg})">✕ ${t('btn.sys_hide_log')}</button></div>
+         <div class="sys-log" id="sys-log-${id}">${esc(logLines.join('\n'))}</div>` : '';
+    // One-line summary, so a folded card still says what matters.
+    const secCount = pk.filter(p => p.security).length;
+    let summary = '';
+    if (m.status === 'offline') summary = `<span class="badge-status badge-security">${t('sys.sum_offline')}</span>`;
+    else if (m.status === 'rebooting') summary = `<span class="badge-status badge-updating">${t('sys.sum_rebooting')}</span>`;
+    else if (m.status === 'online') {
+      summary = pk.length
+        ? `<span class="badge-status ${secCount ? 'badge-security' : 'badge-updating'}">${pk.length === 1 ? t('sys.sum_update_one') : t('sys.sum_updates', {n: pk.length})}</span>`
+        : `<span class="badge-status badge-ok">${t('sys.sum_ok')}</span>`;
+      if (info.reboot_required) summary += ` <span class="badge-status badge-updating">${t('sys.sum_reboot')}</span>`;
+    }
+    const folded = sysCollapsed.has(m.id);
+    const toggle = `onclick="sysToggle(${idArg})" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); sysToggle(${idArg}); }"`;
+    return `<div class="sys-machine">
+      <div class="sys-head">
+        <div class="sys-title" role="button" tabindex="0" aria-expanded="${folded ? 'false' : 'true'}" title="${esc(t(folded ? 'sys.expand' : 'sys.collapse'))}" ${toggle}>
+          <span class="sys-chev">${folded ? '▸' : '▾'}</span><h3>${esc(m.name)}</h3>${summary}
+          ${folded ? '' : `<span class="sys-sub">${osLine}</span>`}<span class="sys-sub">${checked}</span>${busy}
+        </div>
+        <div style="flex:1"></div>${all}</div>
+      ${folded ? '' : `${unattended ? `<div class="sys-sub" style="margin-bottom:8px">${unattended}</div>` : ''}
+      ${rebootLine}
+      ${banners.join('')}${rows}${log}`}
+    </div>`;
+  }
+
+  function systemPanelHtml(machines, logs, open) {
+    // This tab can install software and reboot machines. With no login on the dashboard, anyone who can
+    // reach the page can do that, so say so where it cannot be missed.
+    const warn = (open && !sysOpenDismissed)
+      ? `<div class="sys-banner bad" id="sys-open-warning"><span>⚠️ ${t('sys.open_warning')}</span>
+          <button class="btn-ghost btn-sm" style="margin-left:auto" onclick="sysDismissOpenWarning()" title="${esc(t('sys.open_hide_title'))}">✕ ${t('btn.sys_hide_log')}</button></div>`
+      : '';
+    const note = warn + `<div class="images-note">${t('sys.note')}</div>`;
+    if (!machines.length) {
+      return note + `<div class="empty"><span class="emoji">🖥</span><strong>${t('sys.empty_title')}</strong><p style="margin-top:6px">${t('sys.empty_desc')}</p></div>`;
+    }
+    return note + machines.map(m => sysMachineHtml(m, (logs || {})[m.id])).join('');
+  }
+
+  function sysFormHtml(machines) {
+    const remove = machines.map(m => `<span class="host-chip">${esc(m.name)}
+      <a href="#" onclick="sysTest(${sysArg(m.id)});return false" style="margin-left:6px">${t('btn.sys_test')}</a>
+      <a href="#" onclick="sysRemove(${sysArg(m.id)},${sysArg(m.name)});return false" style="margin-left:6px;color:var(--red)">${t('btn.sys_remove')}</a></span>`).join(' ');
+    return `<div class="section-title" style="margin-top:20px">${t('sys.add_title')}</div>
+      <div class="sys-form">
+        <select id="sys-kind" onchange="sysKindChanged()" style="padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg,var(--bg));color:var(--fg);font-size:13px">
+          <option value="apt">${t('sys.kind_apt')}</option><option value="dsm">${t('sys.kind_dsm')}</option><option value="windows">${t('sys.kind_win')}</option></select>
+        <input id="sys-name" placeholder="${esc(t('sys.f_name'))}" style="width:150px">
+        <input id="sys-address" placeholder="sysupdate@host.docker.internal" style="width:260px">
+        <input id="sys-port" placeholder="22" style="width:70px" inputmode="numeric">
+        <button class="btn-primary btn-sm" onclick="sysAddMachine()">${t('btn.sys_add')}</button>
+      </div>
+      <div id="sys-form-msg" class="sys-sub" style="margin-top:8px"></div>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">${remove}</div>`;
+  }
+  // </system-updates>
+
+  function renderSystemPanel() {
+    const panel = document.getElementById('system-panel');
+    // Only the machine cards are redrawn on each poll — the add form keeps what is being typed.
+    if (!document.getElementById('sys-cards')) panel.innerHTML = '<div id="sys-cards"></div><div id="sys-form"></div>';
+    const machines = allSystem || [];
+    document.getElementById('sys-cards').innerHTML = systemPanelHtml(machines, sysLogs, allSystemOpen);
+    const form = document.getElementById('sys-form');
+    const sig = machines.map(m => m.id + m.name).join('|');
+    if (form.dataset.sig !== sig) {
+      const old = document.getElementById('sys-form-msg');          // keep the last result message
+      const kept = old ? {text: old.textContent, color: old.style.color} : null;
+      form.innerHTML = sysFormHtml(machines); form.dataset.sig = sig;
+      const msg = document.getElementById('sys-form-msg');
+      if (kept && msg) { msg.textContent = kept.text; msg.style.color = kept.color; }
+    }
+    document.querySelectorAll('.sys-log').forEach(el => { el.scrollTop = el.scrollHeight; });
+  }
+
+  async function sysPollLogs() {
+    if (!allSystem) return;
+    for (const m of allSystem) {
+      if (!m.updating && sysFetchedLog[m.id]) continue;
+      // A run that is not in progress is only shown if it was started on this page; after a reload the
+      // old output stays out of the way (it can be dismissed, but should not keep coming back).
+      if (!m.updating) { sysFetchedLog[m.id] = true; continue; }
+      try {
+        const d = await (await fetch(`/api/sysupdate/${encodeURIComponent(m.id)}/log`)).json();
+        sysLogs[m.id] = d.lines || [];
+        sysFetchedLog[m.id] = true;
+      } catch (e) {}
+    }
+    if (currentTab === 'system') renderSystemPanel();
+  }
+
+  function sysMachine(id) { return (allSystem || []).find(m => m.id === id); }
+
+  function sysHideLog(id) {
+    delete sysLogs[id];
+    if (currentTab === 'system') renderSystemPanel();
+  }
+
+  async function sysStart(id, pkgs) {
+    const r = await fetch(`/api/sysupdate/${encodeURIComponent(id)}/upgrade`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({packages: pkgs})});
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      await showAlert(d.error || t('alert.sys_busy'));
+      return;
+    }
+    sysLogs[id] = []; sysFetchedLog[id] = true;
+    await fetchStatus();
+  }
+
+  async function sysUpdate(id, pkg) {
+    const m = sysMachine(id); if (!m) return;
+    if (!(await showConfirm(t('confirm.sys_update_one', {name: pkg, machine: m.name})))) return;
+    await sysStart(id, [pkg]);
+  }
+
+  async function sysUpdateAll(id, n) {
+    const m = sysMachine(id); if (!m) return;
+    if (!(await showConfirm(t('confirm.sys_update_all', {n, machine: m.name})))) return;
+    await sysStart(id, 'all');
+  }
+
+  async function sysChangelog(id, pkg) {
+    document.getElementById('sys-modal-title').textContent = t('modal.sys_changes', {pkg});
+    document.getElementById('sys-modal-text').textContent = '…';
+    document.getElementById('sys-modal-overlay').classList.add('open');
+    try {
+      const d = await (await fetch(`/api/sysupdate/${encodeURIComponent(id)}/changelog/${encodeURIComponent(pkg)}`)).json();
+      document.getElementById('sys-modal-text').textContent = d.text || t('sys.no_changelog');
+    } catch (e) { document.getElementById('sys-modal-text').textContent = t('sys.no_changelog'); }
+  }
+
+  function closeSysModal(e) {
+    if (e && e.target !== document.getElementById('sys-modal-overlay')) return;
+    document.getElementById('sys-modal-overlay').classList.remove('open');
+  }
+
+  async function sysReboot(id) {
+    const m = sysMachine(id); if (!m) return;
+    if (!(await showConfirm(t('confirm.sys_reboot', {machine: m.name})))) return;
+    const d = await (await fetch(`/api/sysupdate/${encodeURIComponent(id)}/reboot`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({confirm: true})})).json().catch(() => ({}));
+    if (!d.ok) await showAlert(d.error || t('sys.reboot_failed'));
+    fetchStatus();
+  }
+
+  function sysFormMsg(text, bad) {
+    const el = document.getElementById('sys-form-msg');
+    if (el) { el.style.color = bad ? 'var(--red)' : ''; el.textContent = text; }
+  }
+
+  async function sysAddMachine() {
+    const name = document.getElementById('sys-name').value.trim();
+    const address = document.getElementById('sys-address').value.trim();
+    const port = document.getElementById('sys-port').value.trim();
+    const kind = document.getElementById('sys-kind').value;
+    const r = await fetch('/api/sysupdate/targets', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, address, port: port || 22, kind})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { sysFormMsg(d.error || t('sys.add_failed'), true); return; }
+    ['sys-name','sys-address','sys-port'].forEach(i => { document.getElementById(i).value = ''; });
+    sysFormMsg('', false);
+    const ok = await sysTest(d.id);
+    if (ok) await fetch('/api/sysupdate/check', {method:'POST'}).catch(() => {});   // first look at the new machine
+    fetchStatus();
+  }
+
+  function sysKindChanged() {
+    const kind = document.getElementById('sys-kind').value;
+    document.getElementById('sys-address').placeholder =
+      kind === 'dsm' ? 'user@192.168.1.50' : kind === 'windows' ? 'user@192.168.1.60' : 'sysupdate@host.docker.internal';
+    document.getElementById('sys-port').placeholder = '22';
+  }
+
+  async function sysTest(id) {
+    sysFormMsg('…', false);
+    const d = await (await fetch(`/api/sysupdate/targets/${encodeURIComponent(id)}/test`, {method:'POST'})).json().catch(() => ({ok:false, error:'?'}));
+    if (!d.ok) { sysFormMsg(t('sys.test_fail', {err: d.error || '?'}), true); return false; }
+    sysFormMsg(t('sys.test_ok', {host: d.hostname, os: d.os, n: d.packages}) + (d.accepted_key ? ' ' + t('sys.test_key') : ''), false);
+    return true;
+  }
+
+  async function sysRemove(id, name) {
+    if (!(await showConfirm(t('confirm.sys_remove', {machine: name})))) return;
+    await fetch(`/api/sysupdate/targets/${encodeURIComponent(id)}`, {method:'DELETE'});
+    fetchStatus();
   }
 
   function renderBackupsPanel() {
@@ -746,6 +1088,18 @@
           </div>
           <label class="toggle">
             <input type="checkbox" id="check-unused" ${_settings.check_unused_images ? 'checked' : ''} onchange="saveSettings()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="settings-card">
+        <div class="setting-row">
+          <div>
+            <div class="setting-label">${t('settings.system_label')}</div>
+            <div class="setting-desc">${t('settings.system_desc')}</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="check-system" ${_settings.check_system_updates ? 'checked' : ''} onchange="saveSettings()">
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -1258,6 +1612,8 @@
       allHosts      = data.hosts || [];
       multiHost     = allHosts.length > 1;
       allImages     = Array.isArray(data.unused_images) ? data.unused_images : null;
+      allSystem     = Array.isArray(data.system_updates) ? data.system_updates : null;
+      allSystemOpen = !!data.system_updates_open;
 
       // Notify banner (auto-generated topic)
       if (data.notify && data.notify.auto && !localStorage.getItem('notify_dismissed')) {
@@ -1278,11 +1634,13 @@
       managePullPolling(stillUpdating.size > 0);
 
       renderAll(data);
-      const banner = document.getElementById('checking-banner');
-      data.check_running ? banner.classList.add('visible') : banner.classList.remove('visible');
-      document.getElementById('check-btn').disabled = data.check_running;
+      sysPollLogs();
+      checkRunning = !!data.check_running;
+      sysCheckRunning = !!data.system_check_running;
+      applyCheckBanners();
       clearTimeout(refreshTimer);
-      const busy = allContainers.some(c => c.updating) || data.check_running;
+      const busy = allContainers.some(c => c.updating) || data.check_running ||
+                   !!(allSystem && allSystem.some(m => m.updating));
       refreshTimer = setTimeout(fetchStatus, busy ? 2000 : 15000);
     } catch (e) {
       refreshTimer = setTimeout(fetchStatus, 10000);
@@ -1299,6 +1657,8 @@
       renderBackupsPanel();
     } else if (currentTab === 'images') {
       renderImagesPanel();
+    } else if (currentTab === 'system') {
+      renderSystemPanel();
     } else if (currentTab === 'settings') {
       // settings panel is static, no re-render needed
     } else {
@@ -1325,22 +1685,29 @@
     document.getElementById('tab-count-images').textContent =
       allImages ? allImages.filter(i => i.status === 'update').length : 0;
     if (!allImages && currentTab === 'images') switchTab('update');
+    // The System tab exists only while the option is on.
+    document.getElementById('tab-system').style.display = allSystem ? '' : 'none';
+    document.getElementById('tab-count-system').textContent = sysPendingCount(allSystem);
+    if (!allSystem && currentTab === 'system') switchTab('update');
   }
 
   function switchTab(tab) {
     currentTab = tab;
+    applyCheckBanners();
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
     const isHosts    = tab === 'hosts';
     const isSettings = tab === 'settings';
     const isBackups  = tab === 'backups';
     const isImages   = tab === 'images';
-    const isContent  = !isHosts && !isSettings && !isBackups && !isImages;
+    const isSystem   = tab === 'system';
+    const isContent  = !isHosts && !isSettings && !isBackups && !isImages && !isSystem;
     document.getElementById('container-list').style.display = isContent ? '' : 'none';
     document.getElementById('select-toolbar').style.display = isContent ? '' : 'none';
     document.getElementById('hosts-panel').style.display    = isHosts ? '' : 'none';
     document.getElementById('backups-panel').style.display  = isBackups ? '' : 'none';
     document.getElementById('images-panel').style.display   = isImages ? '' : 'none';
+    document.getElementById('system-panel').style.display   = isSystem ? '' : 'none';
     document.getElementById('settings-panel').style.display = isSettings ? '' : 'none';
     document.getElementById('history-title').style.display  = isContent ? '' : 'none';
     document.getElementById('history-list').style.display   = isContent ? '' : 'none';
@@ -1348,6 +1715,7 @@
     else if (isSettings) renderSettingsPanel();
     else if (isBackups) renderBackupsPanel();
     else if (isImages) renderImagesPanel();
+    else if (isSystem) renderSystemPanel();
     else { renderContainerList(allContainers, tab); updateSelectionUI(); }
   }
 
@@ -1704,10 +2072,28 @@
 
   // ── Update / defer ────────────────────────────────────────────────────────
 
+  // Each tab shows the banner for its own check: the System tab the system check, every other tab
+  // the container check. They run independently and finish at different times.
+  function applyCheckBanners() {
+    const onSystem = currentTab === 'system';
+    document.getElementById('checking-banner').classList.toggle('visible', checkRunning && !onSystem);
+    document.getElementById('sys-checking-banner').classList.toggle('visible', sysCheckRunning && onSystem);
+    // The button belongs to the tab: System checks the machines, every other tab checks the containers.
+    // With the System option off it is the plain "Check Now" it always was.
+    const btn = document.getElementById('check-btn');
+    const sysMode = onSystem && allSystem !== null;
+    btn.textContent = allSystem === null ? t('btn.check_now') : t(sysMode ? 'btn.check_system_now' : 'btn.check_docker_now');
+    btn.disabled = sysMode ? sysCheckRunning : checkRunning;
+  }
+
   async function triggerCheck() {
-    document.getElementById('check-btn').disabled = true;
-    document.getElementById('checking-banner').classList.add('visible');
-    await fetch('/api/check', {method:'POST'});
+    if (currentTab === 'system' && allSystem !== null) {
+      sysCheckRunning = true; applyCheckBanners();
+      await fetch('/api/sysupdate/check', {method:'POST'});
+    } else {
+      checkRunning = true; applyCheckBanners();
+      await fetch('/api/check', {method:'POST'});
+    }
     loadSettings();
     fetchStatus();
   }

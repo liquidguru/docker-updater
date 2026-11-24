@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""dock-dsmstatus - the Synology half of Docker Updater's optional "System updates" feature.
+
+Run it as root from DSM's Task Scheduler (every few hours). It ASKS DSM, read-only, three questions and
+writes the answers to one small file that Docker Updater then reads over a locked SSH key:
+
+    SYNO.Core.Upgrade.Server  check    is a new DSM version available?
+    SYNO.Core.Package         list     which packages are installed, at which version
+    SYNO.Core.Package.Server  list     the newest version Synology offers of each package
+
+It installs nothing, changes no setting and uses no other API. Whether a package is out of date is
+worked out by Docker Updater, not here, so this script rarely needs touching.
+
+    dock-dsmstatus --owner <user> [--out /var/services/homes/<user>/.dock-dsmstatus.json]
+
+The file is written atomically, mode 644, and handed to --owner so a non-root SSH user can read it.
+Install this script root-owned (e.g. /usr/local/bin/dock-dsmstatus, mode 755) and NOT in a folder the
+SSH user can write to: root runs it.
+"""
+import argparse
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+SCHEMA = 1
+SYNOWEBAPI = "/usr/syno/bin/synowebapi"
+VERSION_FILE = "/etc.defaults/VERSION"
+API_TIMEOUT = 180
+
+
+def call(api, method, version, **params):
+    """One read-only WebAPI call -> its parsed `data`. synowebapi prints a header line
+    ('[Line n] Exec WebAPI: ... param={} ...') before the JSON, and that header itself contains braces,
+    so the JSON is the first line that STARTS with '{'."""
+    cmd = [SYNOWEBAPI, "--exec", f"api={api}", f"method={method}", f"version={version}"]
+    cmd += [f"{k}={v}" for k, v in params.items()]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=API_TIMEOUT)
+    m = re.search(r"^\{", r.stdout, re.M)
+    if not m:
+        raise RuntimeError(f"{api} {method}: no JSON in the reply (exit {r.returncode})")
+    reply = json.loads(r.stdout[m.start():])
+    if reply.get("success") is not True:
+        raise RuntimeError(f"{api} {method}: DSM refused ({json.dumps(reply.get('error', reply))[:200]})")
+    return reply.get("data") or {}
+
+
+def read_version(path=VERSION_FILE):
+    out = {}
+    with open(path) as f:
+        for line in f:
+            m = re.match(r'^(\w+)="(.*)"\s*$', line.strip())
+            if m:
+                out[m.group(1)] = m.group(2)
+    return out
+
+
+def os_label(v):
+    """'DSM 7.3.2-86009 Update 6' - the same wording DSM shows."""
+    base = f"DSM {v.get('productversion', '?')}-{v.get('buildnumber', '?')}"
+    fix = v.get("smallfixnumber", "")
+    return f"{base} Update {fix}" if fix not in ("", "0") else base
+
+
+def package_lists(data):
+    """Every package dict in one Package.Server reply - or in several, passed as a list. DSM answers for
+    the official catalogue and for the third-party sources (e.g. SynoCommunity) as two SEPARATE replies,
+    so both are needed; either may use any list name. A package can appear several times with different
+    VERSIONS (a beta next to the stable one), so entries are only de-duplicated by id AND version."""
+    replies = data if isinstance(data, list) else [data]
+    found, seen = [], set()
+    for reply in replies:
+        for value in (reply or {}).values():
+            if isinstance(value, list) and value and all(isinstance(x, dict) for x in value)                     and any("id" in x and "version" in x for x in value):
+                for p in value:
+                    key = (p.get("id"), p.get("version"))
+                    if key not in seen:
+                        seen.add(key)
+                        found.append(p)
+    return found
+
+
+def build_status(upgrade, installed, server, version, hostname, now):
+    return {
+        "schema": SCHEMA, "kind": "dsm", "time": int(now), "hostname": hostname, "os": os_label(version),
+        "dsm": upgrade,
+        "installed": [{"id": p.get("id"), "name": p.get("name"), "version": p.get("version")}
+                      for p in installed.get("packages", []) if p.get("id")],
+        "server": [{"id": p.get("id"), "dname": p.get("dname"), "version": p.get("version"),
+                    "is_security_version": bool(p.get("is_security_version")), "beta": bool(p.get("beta"))}
+                   for p in package_lists(server) if p.get("id") and p.get("version")],
+    }
+
+
+def write_atomic(path, payload, owner=None):
+    folder = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".dock-dsmstatus-", dir=folder)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f)
+        os.chmod(tmp, 0o644)
+        if owner:
+            import pwd
+            pw = pwd.getpwnam(owner)
+            os.chown(tmp, pw.pw_uid, pw.pw_gid)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Write DSM / package update status for Docker Updater.")
+    ap.add_argument("--owner", required=True, help="the SSH user that will read the file (e.g. admin)")
+    ap.add_argument("--out", help="default: /var/services/homes/<owner>/.dock-dsmstatus.json")
+    args = ap.parse_args(argv)
+    out = args.out or f"/var/services/homes/{args.owner}/.dock-dsmstatus.json"
+    now, host = time.time(), socket.gethostname()
+    try:
+        status = build_status(
+            call("SYNO.Core.Upgrade.Server", "check", 1),
+            call("SYNO.Core.Package", "list", 1),
+            # Two questions, as Package Center asks them. blloadothers=false is Synology's own catalogue,
+            # blloadothers=true is ONLY the third-party sources you added (e.g. SynoCommunity) - not both.
+            # With just the first, third-party packages have nothing to be compared against and look up
+            # to date; with just the second, the official ones do. blforcereload=true asks the servers now.
+            [call("SYNO.Core.Package.Server", "list", 2, blforcereload="true", blloadothers=others)
+             for others in ("false", "true")],
+            read_version(), host, now)
+        code = 0
+    except Exception as e:                         # leave an honest file rather than a stale good one
+        status = {"schema": SCHEMA, "kind": "dsm", "time": int(now), "hostname": host, "error": str(e)}
+        code = 1
+    write_atomic(out, status, args.owner)
+    print(("wrote " if code == 0 else "wrote ERROR file ") + out)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

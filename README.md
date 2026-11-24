@@ -76,7 +76,7 @@ curl -H "Authorization: Bearer $API_KEY" http://your-host:9292/api/status
 - Leave it unset and nothing changes.
 - Anyone holding the key can read every container name, image and host in `/api/status`, so treat it as a secret, and rotate it by changing the variable and recreating the container.
 
-A community widget for Homepage is in development ([gethomepage/homepage#7305](https://github.com/gethomepage/homepage/discussions/7305)); it can use this key.
+A community widget for Homepage ([gethomepage/homepage#7305](https://github.com/gethomepage/homepage/discussions/7305)) supports this key — the widget's `key:` setting is sent as the Bearer key. It is not part of Homepage itself yet; see the discussion for details.
 
 ## Language
 
@@ -102,6 +102,7 @@ The WebUI supports **English** and **简体中文**:
 - **Smart history icons** — recent updates show ✅ (succeeded or running & up-to-date), ⚠️ (errored but container still running), or ❌ (errored and stopped), with a `● running / ● stopped` dot for every row; hover the icon to see the error message without opening the log
 - **Push notifications** — auto-generates a private ntfy topic on first run; or bring your own Apprise URL (ntfy, Pushover, Discord, Slack, etc.)
 - **Unused images (opt-in)** — an extra setting, off by default and invisible until switched on, that also checks tagged images no running container uses and tells you when the registry has a newer version. Informational only: it never pulls anything, because an old image may belong to a database whose data a newer version can't read
+- **System updates (opt-in)** — an extra setting, off by default and invisible until switched on, that adds a System tab listing the package updates waiting on the machines you add (Debian/Ubuntu, over a locked-down SSH key): each package with a Security badge and a reboot hint, its changelog on demand, Update / Update all with live output, a reboot button that asks first, and one notification per new set of updates. A Synology NAS or a Windows PC can be added too, read-only: they list the updates waiting, and you install them in DSM or Windows Update
 - **GitHub notifications** — optional webhook endpoint receives issue, PR, star, push, and release events from any of your repos and forwards them as push notifications
 - **Scheduled checks** — configurable from the **Settings** tab with presets (every 6/12 hours, daily, weekly, monthly) or a custom cron expression; changes apply immediately with no restart, and the next run time is shown. The schedule persists on the data volume, so it survives restarts, recreation, and image updates. Notifications only fire on the scheduled run, not on startup or manual checks
 - **Image size on the card** — each container card shows its image's on-disk size; when an update is available, a **↓** chip shows how much a pull will actually download — only the layers your host doesn't already have — and a **▤ new/total** chip shows the layer count, with the full breakdown on hover
@@ -193,6 +194,7 @@ Save as `docker-compose.yml`, create a `data/` directory and the optional `.env`
 | `TIMEZONE` | `Australia/Melbourne` | Timezone for the scheduled check — any [tz database name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *(auto)* | [Apprise URL](https://github.com/caronc/apprise/wiki) for push notifications. If not set, a unique private ntfy.sh topic is generated automatically. |
 | `CHECK_UNRUNNING_IMAGES` | `false` | **Initial default** for also checking images that no running container uses — see [Unused images](#unused-images-opt-in). Informational only; nothing is ever pulled. A choice saved in **Settings** takes precedence. |
+| `CHECK_SYSTEM_UPDATES` | `false` | **Initial default** for also checking the operating-system package updates of the machines you add (Linux, a Synology NAS, Windows PCs) — see [System updates](#system-updates-opt-in). A choice saved in Settings wins. |
 | `CHECK_IMAGES_WITHOUT_DIGEST` | `false` | **Initial default** for checking tagged images without `RepoDigests` (offline imports **and local builds**). A choice saved in **Settings** takes precedence. Adds registry lookups; Update can replace a local build with the same-named registry image. |
 | `GITHUB_WEBHOOK_SECRET` | *(empty)* | Secret for verifying GitHub webhook signatures. Required if using the GitHub notifications feature. |
 | `DOCKERHUB_USERNAME` | *(empty)* | Docker Hub username, to authenticate digest checks and raise the rate limit — see [Docker Hub rate limits](#docker-hub-rate-limits). Needs `DOCKERHUB_TOKEN` too. |
@@ -438,6 +440,183 @@ What it looks at:
 - Every host you have added, not just the local one.
 
 Unused images with a newer version are added to the scheduled check's push notification, marked "(unused image)", and they follow **Only notify about new updates** like everything else. Each one costs a registry lookup, so a host with many images takes noticeably longer to check — 32 images took about 70 seconds in testing — and the lookups count towards [Docker Hub rate limits](#docker-hub-rate-limits).
+
+---
+
+## System updates (opt-in)
+
+I added this because I run four machines on my home network, on different operating systems — one of them a headless Ubuntu server — and wanted one easy place to see which system updates were waiting. It is a completely opt-in feature: use it if it helps you, and if you don't, you will never see it.
+
+docker-updater can also watch the operating-system packages of the machines your containers run on — the "2 updates pending" on the server itself, not just inside its containers. Turn on **Settings → Also check system (OS package) updates on my machines** (or start with `CHECK_SYSTEM_UPDATES=true` to set the initial default — a choice saved in Settings wins) and a **System** tab appears. Linux machines that use apt (Debian, Ubuntu) can be updated from here; a Synology NAS or a Windows PC can be added too, but only checked (see "Setting up a Synology NAS" and "Setting up a Windows PC" below).
+
+It is **off by default, and while it is off there is no trace of it**: nothing is checked or stored, and the dashboard shows no System tab. Switching it off again deletes what it stored; the list of machines is configuration and stays.
+
+What you get:
+
+- Each pending package with the version installed and the one on offer, a **Security** badge when it comes from the security archive, a **May need reboot** hint for kernels and core libraries, and a **Held back** badge for anything apt is holding back (those cannot be installed from here).
+- **What's changed** shows a package's changelog before you decide.
+- **Update** per package or **Update all**, with the apt output streamed live. Nothing installs unless you press a button — a machine with unattended upgrades switched on still installs security fixes by itself, and the tab says so.
+- A **Reboot required** banner with the reason, and a **Reboot…** button that asks first and is disabled while an update runs. Services that should be restarted after an update are listed.
+- Before you press Update, a line says whether the pending updates are likely to need a reboot afterwards (kernels and core libraries are the usual reason). It is a guess from the package names; the **Reboot required** banner is the machine's own answer once something is installed.
+- The output of an update stays on screen until you press **Hide**, which is off while it is running.
+- One push notification per machine when a new set of updates appears or a reboot becomes pending — not one per check.
+- Each machine is a card you can fold away: click its name, or press Enter on it. A folded card keeps a one-line summary ("3 updates", "Up to date", "Offline", "Reboot required") and, on a Linux machine, its **Update all** button. Which cards are folded is remembered in your browser.
+- **Check System Now** gets a fresh answer from Linux and Windows machines (it runs `apt-get update` or the PC's scheduled task); a Synology re-reads the file its own task wrote.
+- The System check is separate from the container check: it runs in its own thread, so a slow or unreachable machine never holds up your Docker updates or their notification. The System tab has its own **Check System Now** button and its own "Checking system updates…" banner; on every other tab the button and banner are for the containers (**Check Docker Now**). The scheduled and start-up checks do both.
+
+### Setting up a Linux machine (apt)
+
+The machine needs apt and must be reachable from docker-updater over SSH. Everything on it goes through one small script that can do five things and nothing else.
+
+1. Install the script on the machine (it is in this repository, under `contrib/`):
+
+```
+sudo install -m 755 dock-sysupdate /usr/local/sbin/dock-sysupdate
+```
+
+2. Create a user that may run only that script:
+
+```
+sudo useradd --system --create-home --shell /bin/sh sysupdate
+printf 'Defaults:sysupdate env_keep += "SSH_ORIGINAL_COMMAND"\nsysupdate ALL=(root) NOPASSWD: /usr/local/sbin/dock-sysupdate\n' | sudo tee /etc/sudoers.d/dock-sysupdate
+sudo chmod 440 /etc/sudoers.d/dock-sysupdate
+```
+
+3. Make a key for docker-updater and lock it to that script. Create it next to your compose file, then put the public key in `/home/sysupdate/.ssh/authorized_keys` on the machine with these options in front, so it can run nothing but the script:
+
+```
+ssh-keygen -t ed25519 -N '' -C docker-updater-sysupdate -f ssh/sysupdate_ed25519
+restrict,command="sudo /usr/local/sbin/dock-sysupdate" ssh-ed25519 AAAA… docker-updater-sysupdate
+```
+
+4. Give the container the key, and a name for the Docker host itself if that is the machine you are adding. If the machine has a firewall, allow the container network to reach port 22:
+
+```
+      - ./ssh/sysupdate_ed25519:/root/.ssh/sysupdate_ed25519:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+5. Switch the option on in Settings, open the **System** tab and add the machine as `sysupdate@host.docker.internal` (or `sysupdate@<address>`). The first **Test** accepts the machine's SSH host key, as for Docker hosts.
+
+### What the Linux key allows
+
+- Only five commands: `status`, `refresh` (an `apt-get update`), `changelog <package>`, `upgrade all|<packages>` and `reboot`. The script refuses everything else.
+- Package names are checked against a strict pattern and against the machine's current list of upgradable packages before apt sees them — no options, no shell, no unrelated packages. Updates never remove an installed package (`--no-remove`).
+- No shell, no port forwarding and no terminal: the `restrict` key option turns them off.
+- The login (`AUTH_USERNAME` / `AUTH_PASSWORD`) covers every System endpoint. The read-only API key covers none of them and does not see the list of machines in `/api/status` either; while the option is off every System endpoint answers 404. Without a login, anyone who can open the page can update and reboot the Linux machines you add, so turn the login on first — the tab shows a warning while there is none. If only you can reach the dashboard (for example it sits behind a login proxy such as Cloudflare Access, or on a network only you use), press **Hide** on the warning; that choice is remembered in your browser.
+### Setting up a Synology NAS (read-only)
+
+A Synology NAS is **checked, never changed**. DSM has no apt, and installing DSM or packages from a script is not something this feature does: the tab lists a pending DSM update and the packages Package Center would offer to update, and you install them in DSM as usual (**Control Panel → Update & Restore**, **Package Center**).
+
+DSM's update information can only be asked for by root on the NAS, and docker-updater has no root there. So a scheduled DSM task runs a small script as root, which writes the answers to one file; docker-updater reads that file over a locked SSH key. Tested on DSM 7.3.2. It needs DSM 7 with `python3` at `/usr/bin/python3`, SSH switched on, and an ordinary (non-root) account that may log in over SSH — `<user>` in the examples; use your own account name.
+
+1. Install the script on the NAS (it is in this repository, under `contrib/`). Keep it **root-owned in a folder only root can write**, because root runs it:
+
+```
+sudo install -m 755 -o root -g root dock-dsmstatus /usr/local/bin/dock-dsmstatus
+```
+
+If copying it over with `scp` fails with *subsystem request failed*, the NAS has SFTP switched off — use `scp -O`, which does not need it.
+
+2. Run it once as root, to check it works. It writes `/var/services/homes/<user>/.dock-dsmstatus.json`, readable by that user:
+
+```
+sudo /usr/bin/python3 /usr/local/bin/dock-dsmstatus --owner <user>
+```
+
+3. Lock a key to reading that one file. This can be the same key as for your Linux machines (`ssh/sysupdate_ed25519`) — add its public key to the NAS account's `~/.ssh/authorized_keys` with these options in front, using your docker-updater host's address:
+
+```
+from="<docker-updater host IP>",restrict,command="/bin/cat /var/services/homes/<user>/.dock-dsmstatus.json" ssh-ed25519 AAAA… docker-updater-sysupdate
+```
+
+4. Keep the file fresh. In DSM open **Control Panel → Task Scheduler → Create → Scheduled Task → User-defined script**. Run it as `root`, repeating every 6 hours, with this command:
+
+```
+/usr/bin/python3 /usr/local/bin/dock-dsmstatus --owner <user>
+```
+
+5. In the **System** tab choose **Synology (DSM, read-only)** in the add form and add the NAS as `<user>@<NAS address>` with its SSH port. The key is mounted into the container exactly as in the Linux steps.
+
+What the card shows:
+
+- A **DSM** row when DSM itself has an update waiting, and a row for each package that is out of date. There is no Update, Reboot or changelog button for a NAS — only a note to update in DSM. The server refuses those requests as well.
+- Packages are compared **the way Package Center does it**. Only stable releases count: a beta build is ignored, as Package Center ignores it unless you opt in to the beta channel. Synology's own catalogue and any **third-party package sources** you added (SynoCommunity, for example) are both asked, so those packages are checked too.
+- A package that appears in **no** source DSM can see cannot be checked. The card says how many there are (hover for the names) instead of calling them up to date.
+- **Check System Now** re-reads the file; it does not make the NAS ask Synology again. That happens when the scheduled task runs. If the file is more than 12 hours old the card warns that the task has stopped.
+- One push notification per new set of updates, the same as for Linux machines.
+
+### What the Synology key allows
+
+- It can only print one file. The key is locked to `cat` of that file, whatever docker-updater sends is ignored, and `restrict` turns off a shell, port forwarding and a terminal. `from=` limits it to your docker-updater host.
+- The script asks DSM exactly three read-only questions: is a new DSM available, which packages are installed, and the newest version on offer for each (from both catalogues). It never installs, starts, stops or changes anything, and the test suite checks that it cannot.
+- The script runs as root, so keep it root-owned and out of any folder the SSH user can write to.
+
+### Setting up a Windows PC (read-only)
+
+A Windows PC is **checked, never changed**, like a Synology: the tab lists the updates Windows Update has waiting and whether a restart is pending, and you install them in Windows Update as usual. There is no Update or Reboot button, and the server refuses those requests too. Tested on Windows 11. It needs OpenSSH Server on the PC and an administrator to set it up; the scripts use only the Windows PowerShell 5.1 that comes with Windows.
+
+Two small scripts in this repository (under `contrib/`) do the work. `dock-winstatus.ps1` runs on a schedule as SYSTEM, asks Windows Update what is waiting (a search, nothing more) and writes one file. `dock-winstatus-ssh.ps1` is the only thing docker-updater's SSH key may run: it prints that file, and on a refresh it starts the scheduled task first, so you get a fresh answer.
+
+Run these in an administrator PowerShell on the PC:
+
+1. **OpenSSH Server.** If the PC does not have it yet:
+
+```
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+```
+
+Windows downloads it from Windows Update, which can take a while. Then make it key-only and home-network-only: in `C:\ProgramData\ssh\sshd_config` set `PasswordAuthentication no` and `KbdInteractiveAuthentication no`, restart `sshd`, and limit the firewall rule with `Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -RemoteAddress 192.168.1.0/24`.
+
+2. **Install the two scripts** where only administrators can change them, because SYSTEM runs one and the SSH user the other, and create the output folder:
+
+```
+New-Item -ItemType Directory -Force 'C:\Program Files\dock-winstatus', 'C:\ProgramData\dock-winstatus'
+Copy-Item dock-winstatus.ps1, dock-winstatus-ssh.ps1 'C:\Program Files\dock-winstatus\'
+icacls 'C:\ProgramData\dock-winstatus' /inheritance:r /grant 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' 'Users:(OI)(CI)RX'
+```
+
+3. **The scheduled task** — as SYSTEM, every 6 hours, stopped if it runs longer than 30 minutes. The name must be exactly this, because the forced command starts it by name:
+
+```
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\dock-winstatus\dock-winstatus.ps1"'
+$trigger = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Hours 6) -RepetitionDuration (New-TimeSpan -Days 3650)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -StartWhenAvailable -MultipleInstances IgnoreNew
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName 'Docker Updater - Windows status' -Action $action -Trigger $trigger -Settings $settings -Principal $principal
+Start-ScheduledTask -TaskName 'Docker Updater - Windows status'
+```
+
+A minute later `C:\ProgramData\dock-winstatus\status.json` should exist.
+
+4. **Lock a key to the forced command.** Use the same public key as for your Linux machines. For an administrator account add one line to `C:\ProgramData\ssh\administrators_authorized_keys` (for a standard account, `%USERPROFILE%\.ssh\authorized_keys`), using your docker-updater host's address:
+
+```
+from="<docker-updater host IP>",restrict,command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\Program Files\dock-winstatus\dock-winstatus-ssh.ps1\"" ssh-ed25519 AAAA… docker-updater-sysupdate
+```
+
+Keep the administrators file readable by SYSTEM and Administrators only (`icacls <file> /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F'`), or OpenSSH ignores it. Use one line per key: sshd uses the first line that matches, so remove an older line for the same key.
+
+5. In the **System** tab choose **Windows (read-only)** in the add form and add the PC as `<user>@<address>` with SSH port 22. The key is mounted into the container exactly as in the Linux steps.
+
+What the card shows:
+
+- Each pending software update with its title and KB number, a **Security** badge and a **May need reboot** hint. A **Reboot required** banner appears when Windows has a restart waiting, without a button, and each row says "Update in Windows Update".
+- **Microsoft Defender definition updates** ("Security Intelligence Update …") are left out. They arrive several times a day and install themselves, so listing them would only be noise; add `-IncludeDefinitions` to the task's arguments to list them. Drivers are not listed either.
+- **Check System Now** runs the scheduled task on the PC and waits for it, so the answer is fresh — usually 20 to 60 seconds per PC. A PC that is off or asleep shows as offline, and the card warns when its file is more than 12 hours old.
+- Windows Settings → Windows Update has its own "last checked" time. It only moves when a scan is started from Settings, not when something searches through the Windows Update interface, as this script does, so it can read hours old right after a check. Judge freshness by the card's "Checked …" time instead.
+- Debloat tools have been known to uninstall the OpenSSH Server capability at boot. If a PC suddenly shows offline and `Get-Service sshd` says the service does not exist, look for such a boot task before blaming Windows Update.
+
+### What the Windows key allows
+
+- Two words only: `status` (print the file) and `refresh` (start the one fixed scheduled task, wait for it, then print the file). Anything else is treated as `status`. Nothing the connection sends is ever run, passed to a command or used as a path.
+- The scheduled task only searches Windows Update. It never downloads, installs, hides or restarts anything, and a test checks that it cannot.
+- No shell, no port forwarding and no terminal (`restrict`), and `from=` limits the key to your docker-updater host.
+- Both scripts run with high rights (one as SYSTEM), so keep them in an administrator-only folder.
+
 
 ---
 

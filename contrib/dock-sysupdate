@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""dock-sysupdate - the host-side half of Docker Updater's optional "System updates" feature.
+
+Install on a Debian/Ubuntu machine as /usr/local/sbin/dock-sysupdate (root, mode 755) and call it
+ONLY through a restricted SSH key (see README, "System updates"). It does exactly five things and
+nothing else:
+
+    status                    what is upgradable, whether a reboot is pending (no network needed)
+    refresh                   apt-get update, then status
+    changelog <package>       the package's changelog (first lines)
+    upgrade all|<pkg> ...     apt-get upgrade, streamed; specific packages must be upgradable
+    reboot                    schedule a reboot in 10 seconds
+
+The command comes from $SSH_ORIGINAL_COMMAND (set by sshd for a forced-command key) or argv.
+Everything is validated; there is no shell, and package names are checked against a strict pattern
+and against the current upgradable list before apt ever sees them.
+"""
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+SCHEMA = 1
+LOCK_PATH = "/run/dock-sysupdate.lock"
+PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.\-]{0,99}(:[a-z0-9]{1,16})?$")
+MAX_PKGS = 200
+CHANGELOG_LINES = 80
+# Packages whose update normally wants a reboot (a hint only; Ubuntu's own
+# /var/run/reboot-required is the authority once something has been installed).
+REBOOT_HINT_RE = re.compile(
+    r"^(linux-image|linux-modules|linux-generic|libc6$|libc-bin$|systemd$|libsystemd0$|udev$|"
+    r"dbus$|dbus-daemon$|intel-microcode$|amd64-microcode$)")
+APT_ENV = {
+    "LC_ALL": "C", "LANG": "C", "DEBIAN_FRONTEND": "noninteractive",
+    # needrestart: list only, never restart services behind our back
+    "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+}
+
+
+def run(cmd, timeout=300, env_extra=None):
+    env = dict(APT_ENV)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+
+
+# ── parsing (pure functions, unit-tested) ────────────────────────────────────
+
+_LIST_RE = re.compile(r"^(?P<name>[^/\s]+)/(?P<suites>\S+)\s+(?P<to>\S+)\s+\S+\s+\[upgradable from:\s*(?P<frm>[^\]]+)\]")
+
+
+def parse_upgradable(text: str) -> list:
+    """`apt list --upgradable` -> [{name, from, to, suites, security}]."""
+    out = []
+    for line in text.splitlines():
+        m = _LIST_RE.match(line.strip())
+        if not m:
+            continue
+        suites = m.group("suites").split(",")
+        out.append({
+            "name": m.group("name"), "from": m.group("frm").strip(), "to": m.group("to"),
+            "suites": suites, "security": any("security" in s for s in suites),
+        })
+    return out
+
+
+_INST_RE = re.compile(r"^Inst (?P<name>\S+)")
+
+
+def parse_simulated_installs(text: str) -> set:
+    """`apt-get -s upgrade` -> names it would actually install (the rest are held back)."""
+    return {m.group("name") for ln in text.splitlines() if (m := _INST_RE.match(ln))}
+
+
+def parse_needrestart(text: str) -> dict:
+    """`needrestart -b` -> {kernel_pending: bool, services: [names]}."""
+    kernel, services = False, []
+    for ln in text.splitlines():
+        if ln.startswith("NEEDRESTART-KSTA:"):
+            try:
+                kernel = int(ln.split(":", 1)[1].strip()) in (2, 3)
+            except ValueError:
+                pass
+        elif ln.startswith("NEEDRESTART-SVC:"):
+            svc = ln.split(":", 1)[1].strip()
+            if svc:
+                services.append(svc)
+    return {"kernel_pending": kernel, "services": sorted(set(services))}
+
+
+def validate_packages(names: list, upgradable: set) -> str | None:
+    """None when fine, else the reason it is refused."""
+    if not names:
+        return "no packages given"
+    if len(names) > MAX_PKGS:
+        return "too many packages"
+    for n in names:
+        if not PKG_RE.match(n):
+            return f"invalid package name: {n!r}"
+        if n.split(":")[0] not in upgradable and n not in upgradable:
+            return f"not upgradable: {n}"
+    return None
+
+
+# ── gathering ────────────────────────────────────────────────────────────────
+
+def _read(path: str) -> str:
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _os_name() -> str:
+    for ln in _read("/etc/os-release").splitlines():
+        if ln.startswith("PRETTY_NAME="):
+            return ln.split("=", 1)[1].strip().strip('"')
+    return "Linux"
+
+
+def _lists_updated() -> int | None:
+    for p in ("/var/lib/apt/periodic/update-success-stamp", "/var/lib/apt/lists"):
+        try:
+            return int(os.stat(p).st_mtime)
+        except OSError:
+            continue
+    return None
+
+
+def status() -> dict:
+    listed = parse_upgradable(run(["apt", "list", "--upgradable"], timeout=120).stdout)
+    sim = run(["apt-get", "-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=180).stdout
+    installable = parse_simulated_installs(sim)
+    for p in listed:
+        p["held_back"] = p["name"] not in installable
+        p["reboot_hint"] = bool(REBOOT_HINT_RE.match(p["name"]))
+    nr = {"kernel_pending": False, "services": []}
+    if os.path.exists("/usr/sbin/needrestart"):
+        try:
+            nr = parse_needrestart(run(["needrestart", "-b", "-r", "l"], timeout=120).stdout)
+        except Exception:
+            pass
+    reboot_pkgs = [x for x in _read("/var/run/reboot-required.pkgs").split() if x]
+    return {
+        "schema": SCHEMA, "kind": "apt", "hostname": os.uname().nodename, "os": _os_name(),
+        "kernel": os.uname().release, "time": int(time.time()),
+        "reboot_required": os.path.exists("/var/run/reboot-required") or nr["kernel_pending"],
+        "reboot_reasons": sorted(set(reboot_pkgs)), "services_need_restart": nr["services"],
+        "lists_updated": _lists_updated(),
+        "unattended_upgrades": "Unattended-Upgrade \"1\"" in _read("/etc/apt/apt.conf.d/20auto-upgrades"),
+        "packages": listed,
+    }
+
+
+def changelog(pkg: str) -> int:
+    r = run(["apt-get", "changelog", pkg], timeout=60)
+    text = r.stdout if r.returncode == 0 and r.stdout.strip() else ""
+    if not text:
+        # fall back to the copy shipped with the installed package
+        for p in (f"/usr/share/doc/{pkg}/changelog.Debian.gz", f"/usr/share/doc/{pkg}/changelog.gz"):
+            if os.path.exists(p):
+                import gzip
+                try:
+                    with gzip.open(p, "rt", errors="replace") as f:
+                        text = f.read()
+                    break
+                except OSError:
+                    pass
+    if not text:
+        print("No changelog available for this package.")
+        return 1
+    lines = [ln for ln in text.splitlines() if not ln.startswith(("Get:", "Fetched "))]
+    print("\n".join(lines[:CHANGELOG_LINES]))
+    return 0
+
+
+def upgrade(names: list) -> int:
+    import fcntl  # Linux only; imported here so the parsing helpers load (and test) anywhere
+    lock = open(LOCK_PATH, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Another update is already running on this machine.")
+        return 3
+    # --no-remove: an update from here may never delete an installed package to satisfy a dependency.
+    base = ["apt-get", "-y", "--no-remove", "-o", "DPkg::Lock::Timeout=180",
+            "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+    cmd = base + (["upgrade"] if names == ["all"] else ["install", "--only-upgrade"] + names)
+    env = dict(APT_ENV)
+    print("$ apt-get " + ("upgrade" if names == ["all"] else "install --only-upgrade " + " ".join(names)), flush=True)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    assert p.stdout is not None
+    for line in p.stdout:
+        print(line.rstrip(), flush=True)
+    rc = p.wait()
+    print(f"exit status {rc}", flush=True)
+    return rc
+
+
+def reboot() -> int:
+    r = run(["systemd-run", "--on-active=10s", "--unit=dock-sysupdate-reboot", "systemctl", "reboot"], timeout=30)
+    print((r.stdout + r.stderr).strip() or "reboot scheduled in 10 seconds")
+    return r.returncode
+
+
+# ── entry point ──────────────────────────────────────────────────────────────
+
+def parse_command(argv: list) -> tuple:
+    """-> (verb, args). Raises ValueError for anything not on the list."""
+    if not argv:
+        raise ValueError("no command")
+    verb, args = argv[0], argv[1:]
+    if verb in ("status", "refresh", "reboot"):
+        if args:
+            raise ValueError(f"{verb} takes no arguments")
+    elif verb == "changelog":
+        if len(args) != 1 or not PKG_RE.match(args[0]):
+            raise ValueError("changelog needs one valid package name")
+    elif verb == "upgrade":
+        if not args:
+            raise ValueError("upgrade needs 'all' or package names")
+        if args != ["all"] and "all" in args:
+            raise ValueError("'all' cannot be mixed with package names")
+    else:
+        raise ValueError(f"unknown command: {verb!r}")
+    return verb, args
+
+
+def main() -> int:
+    raw = os.environ.get("SSH_ORIGINAL_COMMAND")
+    try:
+        argv = shlex.split(raw) if raw is not None else sys.argv[1:]
+        verb, args = parse_command(argv)
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    if os.geteuid() != 0:
+        print("refused: must run as root", file=sys.stderr)
+        return 2
+    try:
+        if verb == "status":
+            print(json.dumps(status()))
+        elif verb == "refresh":
+            r = run(["apt-get", "-o", "DPkg::Lock::Timeout=120", "update", "-qq"], timeout=300)
+            if r.returncode != 0:
+                print("apt-get update failed: " + (r.stderr or r.stdout).strip()[-500:], file=sys.stderr)
+                return r.returncode
+            print(json.dumps(status()))
+        elif verb == "changelog":
+            return changelog(args[0])
+        elif verb == "upgrade":
+            if args != ["all"]:
+                up = {p["name"] for p in parse_upgradable(run(["apt", "list", "--upgradable"], timeout=120).stdout)}
+                bad = validate_packages(args, up)
+                if bad:
+                    print(f"refused: {bad}", file=sys.stderr)
+                    return 2
+            return upgrade(args)
+        elif verb == "reboot":
+            return reboot()
+    except subprocess.TimeoutExpired:
+        print("timed out", file=sys.stderr)
+        return 124
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

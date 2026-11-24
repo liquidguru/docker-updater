@@ -59,6 +59,8 @@ function tabState(images, current) {
   return {display: el('tab-images').style.display, count: String(el('tab-count-images').textContent), switched};
 }
 let allImages = null, currentTab = 'update', switched = [];
+let allSystem = null;                      // the System tab's state: not under test here
+function sysPendingCount() { return 0; }
 function switchTab(tab) { switched.push(tab); }
 out.tabs = {
   off:            tabState(null, 'update'),

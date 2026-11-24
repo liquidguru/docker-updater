@@ -77,7 +77,7 @@ curl -H "Authorization: Bearer $API_KEY" http://your-host:9292/api/status
 - 不设置则一切照旧。
 - 持有该密钥的人可以在 `/api/status` 中读取所有容器名称、镜像和主机，因此请当作机密对待；更换时修改变量并重建容器即可。
 
-Homepage 的社区小组件正在开发中（[gethomepage/homepage#7305](https://github.com/gethomepage/homepage/discussions/7305)），它可以使用此密钥。
+Homepage 的社区小组件（[gethomepage/homepage#7305](https://github.com/gethomepage/homepage/discussions/7305)）支持此密钥——小组件的 `key:` 设置会作为 Bearer 密钥发送。它还不是 Homepage 本身的一部分，详情见该讨论。
 
 ## 语言
 
@@ -103,6 +103,7 @@ WebUI 支持 **English** 和 **简体中文**：
 - **智能历史状态图标** — 最近更新使用 ✅（成功或仍在运行且已是最新）、⚠️（出现错误但容器仍在运行）或 ❌（出现错误且容器已停止），每行还会显示 `● 运行中 / ● 已停止`；悬停图标可直接查看错误信息
 - **推送通知** — 首次运行自动生成私有 ntfy 主题，也可以使用自定义 Apprise URL（ntfy、Pushover、Discord、Slack 等）
 - **未使用的镜像（可选）** — 一个默认关闭、开启前完全不可见的额外设置：同时检查没有运行中容器使用的带标签镜像，并在镜像仓库有新版本时通知你。仅作提示：它绝不会拉取任何内容，因为旧镜像可能属于某个数据库，而新版本未必能读取其数据
+- **系统更新（可选）** — 一个默认关闭、开启前完全不可见的额外设置：新增“系统”页，列出你添加的机器（Debian/Ubuntu，通过受限的 SSH 密钥）上待安装的软件包更新：每个软件包带有安全标记和重启提示，可按需查看更新日志，支持更新 / 全部更新并实时显示输出，重启按钮会先询问确认，每组新的更新只发送一条通知。群晖 NAS 和 Windows 电脑也可以添加，但为只读：它们会列出待安装的更新，由你在 DSM 或 Windows 更新中安装
 - **GitHub 通知** — 可选的 Webhook 接口可以接收任意仓库的 Issue、PR、Star、Push 和 Release 事件并转发为推送通知
 - **计划检查** — 可在“设置”中选择每 6/12 小时、每天、每周、每月或自定义 cron；修改立即生效并显示下次运行时间。计划保存在数据卷中，可跨重启、重建和镜像更新保留。只有计划任务会发送更新通知，启动扫描和手动检查不会发送通知
 - **卡片显示镜像大小** — 每张容器卡片都会显示该镜像在磁盘上占用的大小；当有可用更新时，**↓** 标记会显示本次拉取实际需要下载的数据量（只统计本机尚未拥有的层），**▤ 新增/总数** 标记则显示层数，悬停可查看完整明细
@@ -194,6 +195,7 @@ services:
 | `TIMEZONE` | `Australia/Melbourne` | 计划检查所使用的时区，可以是任意 [tz 数据库名称](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) |
 | `NOTIFY_URL` | *（自动）* | 用于推送通知的 [Apprise URL](https://github.com/caronc/apprise/wiki)。未设置时会自动生成唯一的私有 ntfy.sh 主题。 |
 | `CHECK_UNRUNNING_IMAGES` | `false` | 是否同时检查没有运行中容器使用的镜像的**初始默认值**——详见[未使用的镜像](#未使用的镜像可选)。仅作提示；绝不会拉取任何内容。在**设置**中保存的选择优先。 |
+| `CHECK_SYSTEM_UPDATES` | `false` | 是否同时检查你添加的机器（Linux、群晖 NAS、Windows 电脑）的操作系统软件包更新的**初始默认值**——详见[系统更新](#系统更新可选)。在设置中保存的选择优先。 |
 | `CHECK_IMAGES_WITHOUT_DIGEST` | `false` | 是否检查没有 `RepoDigests` 的带标签镜像（离线导入**及本地构建**）的**初始默认值**。在**设置**中保存的选择优先。会增加仓库查询；点击“更新”可能将本地构建替换为同名仓库镜像。 |
 | `GITHUB_WEBHOOK_SECRET` | *（空）* | 验证 GitHub Webhook 签名的密钥。使用 GitHub 通知功能时必须配置。 |
 | `AUTH_USERNAME` | *（空）* | 面板登录用户名；必须同时设置 `AUTH_PASSWORD` 才会启用鉴权。 |
@@ -439,6 +441,183 @@ docker-updater 可以接收 GitHub Webhook 事件，并将其转发为推送通�
 - 你添加的每台主机，而不只是本机。
 
 有新版本的未使用镜像会被加入定时检查的推送通知，并标注“（未使用的镜像）”，同样遵循**仅通知新的更新**。每个镜像都需要一次仓库查询，因此镜像很多的主机检查会明显变慢——测试中 32 个镜像约用了 70 秒——这些查询也会计入 [Docker Hub 速率限制](#docker-hub-速率限制)。
+
+---
+
+## 系统更新（可选）
+
+我加入这个功能，是因为我在家里的网络上有四台运行不同操作系统的机器——其中一台是没有显示器的 Ubuntu 服务器——我想要一个简单的地方，一眼看到有哪些系统更新在等待。这是一个完全可选的功能：对你有用就用，不需要的话你永远不会看到它。
+
+docker-updater 还可以监视容器所在机器的操作系统软件包——也就是服务器本身那条“有 2 个待更新”，而不只是容器里的更新。开启**设置 → 同时检查我的机器上的系统（操作系统软件包）更新**（或启动时设置 `CHECK_SYSTEM_UPDATES=true` 作为初始默认值——在设置中保存的选择优先），就会出现**系统**页。基于 apt 的 Linux 机器（Debian、Ubuntu）可以在这里更新；群晖 NAS 和 Windows 电脑也可以添加，但只做检查（见下文“设置群晖 NAS”和“设置 Windows 电脑”）。
+
+它**默认关闭，关闭时不留任何痕迹**：不会检查、不会存储，面板上也不会出现“系统”页。再次关闭会删除它所存储的数据；机器列表属于配置，会保留。
+
+你会看到：
+
+- 每个待更新的软件包，包括已安装版本和可用版本；来自安全源的更新带有**安全**标记，内核和核心库带有**可能需要重启**提示，被 apt 保留的更新带有**已保留**标记（这些无法在这里安装）。
+- **更新内容**会在你决定之前显示该软件包的更新日志。
+- 可以对单个软件包点**更新**，也可以**全部更新**，apt 的输出会实时显示。不按按钮就不会安装任何东西——开启了自动升级的机器仍会自行安装安全修复，页面也会如实说明。
+- **需要重启**横幅会给出原因，**重启……**按钮会先询问确认，并在更新运行期间禁用。更新后应重启的服务也会列出。
+- 在你点“更新”之前，会有一行说明待安装的更新之后是否可能需要重启（内核和核心库是常见原因）。这是根据软件包名称做的推测；安装完成后，**需要重启**横幅才是机器自己的答复。
+- 更新的输出会一直显示，直到你点**隐藏**；运行期间该按钮不可用。
+- 当出现新的一组更新或需要重启时，每台机器只发送一条推送通知——而不是每次检查都发。
+- 每台机器是一张可以折叠的卡片：点击它的名称，或在其上按 Enter。折叠后的卡片会保留一行摘要（“3 个更新”、“已是最新”、“离线”、“需要重启”），Linux 机器还会保留**全部更新**按钮。哪些卡片被折叠会记在你的浏览器里。
+- **立即检查系统**会让 Linux 和 Windows 机器给出最新结果（分别运行 `apt-get update` 或电脑上的计划任务）；群晖则重新读取它自己的任务写入的文件。
+- 系统检查与容器检查是分开的：它在自己的线程中运行，所以缓慢或无法连接的机器永远不会拖慢你的 Docker 更新及其通知。“系统”页有自己的**立即检查系统**按钮和自己的“正在检查系统更新…”横幅；其他所有页面上的按钮和横幅都是针对容器的（**立即检查 Docker**）。定时检查和启动时检查会两者都做。
+
+### 设置一台 Linux 机器（apt）
+
+这台机器需要使用 apt，并且 docker-updater 能通过 SSH 连到它。机器上的一切都通过一个小脚本完成，它只能做五件事，别无其他。
+
+1. 在机器上安装该脚本（它位于本仓库的 `contrib/` 目录下）：
+
+```
+sudo install -m 755 dock-sysupdate /usr/local/sbin/dock-sysupdate
+```
+
+2. 创建一个只能运行该脚本的用户：
+
+```
+sudo useradd --system --create-home --shell /bin/sh sysupdate
+printf 'Defaults:sysupdate env_keep += "SSH_ORIGINAL_COMMAND"\nsysupdate ALL=(root) NOPASSWD: /usr/local/sbin/dock-sysupdate\n' | sudo tee /etc/sudoers.d/dock-sysupdate
+sudo chmod 440 /etc/sudoers.d/dock-sysupdate
+```
+
+3. 为 docker-updater 生成一个密钥，并把它限定为只能运行该脚本。在 compose 文件旁生成密钥，然后把公钥放进机器上的 `/home/sysupdate/.ssh/authorized_keys`，并在前面加上这些选项，使它只能运行该脚本：
+
+```
+ssh-keygen -t ed25519 -N '' -C docker-updater-sysupdate -f ssh/sysupdate_ed25519
+restrict,command="sudo /usr/local/sbin/dock-sysupdate" ssh-ed25519 AAAA… docker-updater-sysupdate
+```
+
+4. 把密钥提供给容器；如果要添加的机器就是 Docker 主机本身，还要给它一个名字。如果机器有防火墙，请允许容器网络访问 22 端口：
+
+```
+      - ./ssh/sysupdate_ed25519:/root/.ssh/sysupdate_ed25519:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+5. 在设置中开启该选项，打开**系统**页，把机器添加为 `sysupdate@host.docker.internal`（或 `sysupdate@<地址>`）。第一次**测试**会接受该机器的 SSH 主机密钥，与 Docker 主机相同。
+
+### Linux 密钥能做什么
+
+- 只有五条命令：`status`、`refresh`（即 `apt-get update`）、`changelog <软件包>`、`upgrade all|<软件包>` 和 `reboot`。脚本会拒绝其他一切。
+- 软件包名称在交给 apt 之前，会先按严格的格式以及机器当前的可升级列表进行检查——没有选项、没有 shell、也不会碰无关的软件包。更新绝不会移除已安装的软件包（`--no-remove`）。
+- 没有 shell、没有端口转发、没有终端：`restrict` 密钥选项会把它们全部关闭。
+- 登录（`AUTH_USERNAME` / `AUTH_PASSWORD`）覆盖所有“系统”接口。只读 API 密钥一个都不覆盖，也看不到 `/api/status` 中的机器列表；该选项关闭时，所有“系统”接口都返回 404。没有登录时，任何能打开页面的人都可以更新和重启你添加的 Linux 机器，所以请先开启登录——没有登录时该页会显示警告。如果只有你自己能访问该面板（例如放在 Cloudflare Access 之类的登录代理后面，或在只有你使用的网络里），可以点警告上的**隐藏**；这个选择会记在你的浏览器里。
+### 设置群晖 NAS（只读）
+
+群晖 NAS **只检查，从不修改**。DSM 没有 apt，而通过脚本安装 DSM 或套件也不是此功能要做的事：该页会列出待安装的 DSM 更新，以及套件中心会提示更新的套件，你仍然在 DSM 中照常安装（**控制面板 → 更新和还原**、**套件中心**）。
+
+DSM 的更新信息只能由 NAS 上的 root 查询，而 docker-updater 在那里没有 root 权限。因此由 DSM 的计划任务以 root 运行一个小脚本，把结果写进一个文件；docker-updater 通过受限的 SSH 密钥读取该文件。已在 DSM 7.3.2 上测试。需要 DSM 7，且 `python3` 位于 `/usr/bin/python3`，已开启 SSH，并有一个允许通过 SSH 登录的普通（非 root）账户——示例中的 `<用户>` 请换成你自己的账户名。
+
+1. 在 NAS 上安装脚本（位于本仓库的 `contrib/` 目录下）。请让它**归 root 所有，并放在只有 root 能写入的目录**，因为是 root 在运行它：
+
+```
+sudo install -m 755 -o root -g root dock-dsmstatus /usr/local/bin/dock-dsmstatus
+```
+
+如果用 `scp` 复制时提示 *subsystem request failed*，说明 NAS 关闭了 SFTP——请改用 `scp -O`，它不需要 SFTP。
+
+2. 以 root 运行一次，确认可用。它会写入 `/var/services/homes/<用户>/.dock-dsmstatus.json`，该用户可读：
+
+```
+sudo /usr/bin/python3 /usr/local/bin/dock-dsmstatus --owner <user>
+```
+
+3. 把一把密钥限定为只能读取这一个文件。可以和你的 Linux 机器使用同一把密钥（`ssh/sysupdate_ed25519`）——把它的公钥加到 NAS 账户的 `~/.ssh/authorized_keys`，前面加上这些选项，并填入 docker-updater 所在主机的地址：
+
+```
+from="<docker-updater host IP>",restrict,command="/bin/cat /var/services/homes/<user>/.dock-dsmstatus.json" ssh-ed25519 AAAA… docker-updater-sysupdate
+```
+
+4. 让文件保持最新。在 DSM 中打开**控制面板 → 任务计划程序 → 新增 → 计划的任务 → 用户定义的脚本**。以 `root` 身份运行，每 6 小时重复一次，命令为：
+
+```
+/usr/bin/python3 /usr/local/bin/dock-dsmstatus --owner <user>
+```
+
+5. 在**系统**页的添加表单中选择**群晖 (DSM，只读)**，并把 NAS 添加为 `<user>@<NAS 地址>`，填写其 SSH 端口。密钥挂载到容器的方式与 Linux 步骤完全相同。
+
+卡片显示的内容：
+
+- 当 DSM 本身有更新时显示一行 **DSM**，每个过期的套件各一行。NAS 没有更新、重启或更新日志按钮——只有一条“请在 DSM 中更新”的提示。服务器也会拒绝这些请求。
+- 套件按**套件中心的方式**比较。只计入稳定版：测试版会被忽略，就像套件中心在你未加入测试通道时忽略它一样。群晖官方套件库和你添加的任何**第三方套件来源**（例如 SynoCommunity）都会被查询，因此这些套件也会被检查。
+- 如果某个套件不在 DSM 可见的**任何**来源中，就无法检查。卡片会显示这类套件的数量（悬停可看名称），而不是把它们当作已是最新。
+- **立即检查系统**会重新读取该文件；它不会让 NAS 再次向群晖查询——那在计划任务运行时进行。文件超过 12 小时未更新时，卡片会警告任务已停止。
+- 每组新的更新只发送一条推送通知，与 Linux 机器相同。
+
+### 群晖密钥能做什么
+
+- 它只能打印一个文件。密钥被限定为只能对该文件执行 `cat`，docker-updater 发送的任何内容都会被忽略，`restrict` 会关闭 shell、端口转发和终端。`from=` 把它限定在你的 docker-updater 主机上。
+- 脚本只向 DSM 提出三个只读问题：是否有新的 DSM、已安装哪些套件，以及每个套件的最新可用版本（来自两个套件库）。它从不安装、启动、停止或更改任何东西，测试套件也会检查它做不到。
+- 脚本以 root 运行，所以请保持归 root 所有，并且不要放在 SSH 用户可写的任何目录中。
+
+### 设置 Windows 电脑（只读）
+
+Windows 电脑和群晖一样**只检查，从不修改**：该页会列出 Windows 更新中待安装的更新，以及是否有待处理的重启，你仍然在 Windows 更新中照常安装。这里没有更新或重启按钮，服务器也会拒绝这些请求。已在 Windows 11 上测试。电脑上需要有 OpenSSH 服务器，并由管理员来设置；脚本只使用 Windows 自带的 Windows PowerShell 5.1。
+
+本仓库（`contrib/` 目录下）有两个小脚本。`dock-winstatus.ps1` 以 SYSTEM 身份按计划运行，向 Windows 更新询问有哪些更新在等待（只是搜索，别无其他），并写入一个文件。`dock-winstatus-ssh.ps1` 是 docker-updater 的 SSH 密钥唯一能运行的东西：它会打印该文件；在刷新时，它会先启动计划任务，让你得到最新的结果。
+
+在电脑上用管理员 PowerShell 运行：
+
+1. **OpenSSH 服务器。** 如果电脑上还没有：
+
+```
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+```
+
+Windows 会从 Windows 更新下载，可能需要一段时间。然后把它设为仅密钥登录、仅限家庭网络：在 `C:\ProgramData\ssh\sshd_config` 中设置 `PasswordAuthentication no` 和 `KbdInteractiveAuthentication no`，重启 `sshd`，并用 `Set-NetFirewallRule -Name OpenSSH-Server-In-TCP -RemoteAddress 192.168.1.0/24` 限制防火墙规则。
+
+2. **安装这两个脚本**，放在只有管理员能修改的位置（因为一个由 SYSTEM 运行，另一个由 SSH 用户运行），并创建输出文件夹：
+
+```
+New-Item -ItemType Directory -Force 'C:\Program Files\dock-winstatus', 'C:\ProgramData\dock-winstatus'
+Copy-Item dock-winstatus.ps1, dock-winstatus-ssh.ps1 'C:\Program Files\dock-winstatus\'
+icacls 'C:\ProgramData\dock-winstatus' /inheritance:r /grant 'SYSTEM:(OI)(CI)F' 'Administrators:(OI)(CI)F' 'Users:(OI)(CI)RX'
+```
+
+3. **计划任务**——以 SYSTEM 身份，每 6 小时运行一次，运行超过 30 分钟即停止。名称必须与下面完全一致，因为强制命令是按名称启动它的：
+
+```
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\dock-winstatus\dock-winstatus.ps1"'
+$trigger = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Hours 6) -RepetitionDuration (New-TimeSpan -Days 3650)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -StartWhenAvailable -MultipleInstances IgnoreNew
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName 'Docker Updater - Windows status' -Action $action -Trigger $trigger -Settings $settings -Principal $principal
+Start-ScheduledTask -TaskName 'Docker Updater - Windows status'
+```
+
+一分钟后应出现 `C:\ProgramData\dock-winstatus\status.json`。
+
+4. **把密钥限定为只能运行强制命令。** 使用与 Linux 机器相同的公钥。对于管理员账户，在 `C:\ProgramData\ssh\administrators_authorized_keys` 中添加一行（标准账户则是 `%USERPROFILE%\.ssh\authorized_keys`），并填入 docker-updater 所在主机的地址：
+
+```
+from="<docker-updater host IP>",restrict,command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\Program Files\dock-winstatus\dock-winstatus-ssh.ps1\"" ssh-ed25519 AAAA… docker-updater-sysupdate
+```
+
+请让管理员文件只有 SYSTEM 和 Administrators 可读（`icacls <文件> /inheritance:r /grant 'SYSTEM:F' /grant 'Administrators:F'`），否则 OpenSSH 会忽略它。每把密钥只用一行：sshd 使用第一条匹配的行，所以请删除同一密钥的旧行。
+
+5. 在**系统**页的添加表单中选择 **Windows（只读）**，并把电脑添加为 `<用户>@<地址>`，SSH 端口 22。密钥挂载到容器的方式与 Linux 步骤完全相同。
+
+卡片显示的内容：
+
+- 每个待安装的软件更新，带有标题和 KB 编号、**安全**标记和**可能需要重启**提示。当 Windows 有待处理的重启时会出现**需要重启**横幅（没有按钮），每一行都会写明“请在 Windows 更新中安装”。
+- **Microsoft Defender 病毒定义更新**（“Security Intelligence Update …”）不会列出。它们一天到达多次并会自行安装，列出来只会增加干扰；如需列出，请在任务参数中加上 `-IncludeDefinitions`。驱动程序也不会列出。
+- **立即检查系统**会在电脑上运行计划任务并等待它完成，所以结果是最新的——每台电脑通常需要 20 到 60 秒。关机或睡眠中的电脑会显示为离线，文件超过 12 小时未更新时，卡片会给出警告。
+- Windows 设置 → Windows 更新有它自己的“上次检查”时间。它只有在从设置中启动扫描时才会更新，而通过 Windows 更新接口进行搜索（本脚本就是这样做的）不会改变它，所以刚检查完它也可能显示几个小时前。请以卡片上的“已检查 …”时间来判断新鲜度。
+- 已知有些精简工具会在开机时卸载 OpenSSH 服务器组件。如果某台电脑突然显示离线，而 `Get-Service sshd` 提示服务不存在，请先查找这类开机任务，不要先怪罪 Windows 更新。
+
+### Windows 密钥能做什么
+
+- 只有两个词：`status`（打印文件）和 `refresh`（启动那个固定的计划任务，等待它完成，然后打印文件）。其他任何内容都按 `status` 处理。连接发来的任何内容都不会被运行、传给命令或用作路径。
+- 计划任务只搜索 Windows 更新。它从不下载、安装、隐藏或重启任何东西，测试也会检查它做不到。
+- 没有 shell、没有端口转发、没有终端（`restrict`），`from=` 把密钥限定在你的 docker-updater 主机上。
+- 两个脚本都以较高权限运行（其中一个是 SYSTEM），所以请把它们放在仅管理员可写的文件夹中。
+
 
 ---
 
