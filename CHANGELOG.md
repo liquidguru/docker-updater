@@ -2,7 +2,7 @@
 
 All notable changes to docker-updater are documented here.
 
-## [2.0.0] — unreleased
+## [2.0.0] — 2026-11-24
 
 A major release: for the first time docker-updater also looks at the **machines themselves**, not only the containers on them. I added it because I run four machines on my home network, on different operating systems — one of them a headless Ubuntu server — and wanted an easy way to see what system updates were waiting. Everything new is **off by default and invisible until you switch it on** — nothing is checked or stored and the dashboard has no System tab.
 
