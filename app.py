@@ -73,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "2.0.1"
+APP_VERSION          = "2.0.2"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -590,6 +590,30 @@ def _without_compose_labels(labels: dict | None) -> dict:
     return {k: v for k, v in (labels or {}).items() if not k.startswith(_COMPOSE_LABEL_PREFIX)}
 
 
+def _chosen_mac(d: dict) -> str | None:
+    """The container's MAC address on one network, unless Docker made it up.
+
+    A MAC set in the Compose file (`mac_address:` under the network, issue #41) or
+    with `--mac-address` is part of the container's configuration and has to be
+    given again to the replacement, or the container comes back with a new one and
+    anything keyed on the old one (a DHCP reservation, a router rule) stops
+    working. Inspect reports the MAC either way, so the addresses Docker derives
+    from the container's IPv4 address (02:42:ac:11:00:02 for 172.17.0.2) are left
+    out: those follow the address anyway and are not a choice.
+    """
+    mac = (d.get("MacAddress") or "").strip().lower()
+    if not mac:
+        return None
+    ip = (d.get("IPAddress") or "").strip()
+    try:
+        octets = [int(o) for o in ip.split(".")]
+        if len(octets) == 4 and mac == "02:42:" + ":".join(f"{o:02x}" for o in octets):
+            return None
+    except ValueError:
+        pass
+    return mac
+
+
 def _network_specs(nets: dict, own_id: str) -> dict:
     """What `docker network connect` needs for each network a container is on."""
     short = (own_id or "")[:12]
@@ -598,8 +622,23 @@ def _network_specs(nets: dict, own_id: str) -> dict:
             "aliases": [a for a in (d.get("Aliases") or []) if a != short],
             "ipv4_address": (d.get("IPAMConfig") or {}).get("IPv4Address") or None,
             "ipv6_address": (d.get("IPAMConfig") or {}).get("IPv6Address") or None,
+            "mac_address": _chosen_mac(d),
+            "driver_opt": dict(d.get("DriverOpts") or {}) or None,
         }
         for n, d in (nets or {}).items()
+    }
+
+
+def _endpoint_kwargs(spec: dict) -> dict:
+    """The per-network settings, in the form create_endpoint_config and
+    connect_container_to_network take them. Specs saved by an older version have
+    no `mac_address` or `driver_opt`, which simply means none."""
+    return {
+        "aliases": spec.get("aliases") or None,
+        "ipv4_address": spec.get("ipv4_address"),
+        "ipv6_address": spec.get("ipv6_address"),
+        "mac_address": spec.get("mac_address") or None,
+        "driver_opt": spec.get("driver_opt") or None,
     }
 
 
@@ -743,9 +782,7 @@ def _restore_backup_networks(client, container, emit) -> None:
         try:
             if net in attached:
                 client.api.disconnect_container_from_network(container.id, net, force=True)
-            client.api.connect_container_to_network(
-                container.id, net, aliases=spec.get("aliases") or None,
-                ipv4_address=spec.get("ipv4_address"), ipv6_address=spec.get("ipv6_address"))
+            client.api.connect_container_to_network(container.id, net, **_endpoint_kwargs(spec))
         except Exception as e:
             emit(f"  Could not reconnect the backup to network '{net}': {e}")
 
@@ -1121,10 +1158,7 @@ def _run_self_update_helper() -> None:
         if simple_net_name:
             simple_nc = client.api.create_networking_config({
                 simple_net_name: client.api.create_endpoint_config(
-                    aliases=full_nets[simple_net_name].get("aliases") or None,
-                    ipv4_address=full_nets[simple_net_name].get("ipv4_address"),
-                    ipv6_address=full_nets[simple_net_name].get("ipv6_address"),
-                )
+                    **_endpoint_kwargs(full_nets[simple_net_name]))
             })
 
         new_c = client.api.create_container(
@@ -1144,11 +1178,7 @@ def _run_self_update_helper() -> None:
                 if net_name == simple_net_name:
                     continue
                 client.api.connect_container_to_network(
-                    new_c["Id"], net_name,
-                    aliases=net_info.get("aliases") or None,
-                    ipv4_address=net_info.get("ipv4_address"),
-                    ipv6_address=net_info.get("ipv6_address"),
-                )
+                    new_c["Id"], net_name, **_endpoint_kwargs(net_info))
 
         # Claim the backup before the replacement can boot and run its own
         # startup recovery — otherwise it may delete `_old` while we verify.
@@ -3068,15 +3098,7 @@ def apply_update(container_name: str, host_id: str = "local",
         if _is_self:
             emit("\n♻ Self-update detected — docker-updater is updating itself.")
             emit("  Preparing handoff to helper container...")
-            _su_short = old_id[:12]
-            _su_nets = {
-                n: {
-                    "aliases": [a for a in (d.get("Aliases") or []) if a != _su_short],
-                    "ipv4_address": (d.get("IPAMConfig") or {}).get("IPv4Address") or None,
-                    "ipv6_address": (d.get("IPAMConfig") or {}).get("IPv6Address") or None,
-                }
-                for n, d in nets.items()
-            }
+            _su_nets = _network_specs(nets, old_id)
             # Read backup settings and include in spec so the helper knows
             # whether to keep or remove the _old container after a successful update.
             with _state_lock:
@@ -3181,25 +3203,14 @@ def apply_update(container_name: str, host_id: str = "local",
         )
         _carry_over_hostconfig(hc, hcfg)
 
-        short_id = old_id[:12]
-        full_nets = {
-            net_name: {
-                "aliases": [a for a in (net_data.get("Aliases") or []) if a != short_id],
-                "ipv4_address": (net_data.get("IPAMConfig") or {}).get("IPv4Address") or None,
-                "ipv6_address": (net_data.get("IPAMConfig") or {}).get("IPv6Address") or None,
-            }
-            for net_name, net_data in nets.items()
-        }
+        full_nets = _network_specs(nets, old_id)
 
         simple_net_name = next(iter(full_nets), None)
         simple_nc = None
         if simple_net_name:
             simple_nc = client.api.create_networking_config({
                 simple_net_name: client.api.create_endpoint_config(
-                    aliases=full_nets[simple_net_name]["aliases"] or None,
-                    ipv4_address=full_nets[simple_net_name]["ipv4_address"],
-                    ipv6_address=full_nets[simple_net_name]["ipv6_address"],
-                )
+                    **_endpoint_kwargs(full_nets[simple_net_name]))
             })
 
         # ── Recreation with rollback ──────────────────────────────────────────
@@ -3227,11 +3238,7 @@ def apply_update(container_name: str, host_id: str = "local",
                     if net_name == simple_net_name:
                         continue
                     client.api.connect_container_to_network(
-                        new_c["Id"], net_name,
-                        aliases=net_info["aliases"] or None,
-                        ipv4_address=net_info["ipv4_address"],
-                        ipv6_address=net_info["ipv6_address"],
-                    )
+                        new_c["Id"], net_name, **_endpoint_kwargs(net_info))
 
             client.api.start(new_c["Id"])
 

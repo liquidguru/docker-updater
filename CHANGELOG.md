@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [2.0.2] — 2026-11-24
+
+### Fixed
+- **A MAC address set on a network (`mac_address:` under the network in a Compose file, or `--mac-address`) was lost when docker-updater recreated the container (#41)** — the replacement came back with a new, Docker-generated MAC, which breaks anything keyed on the old one such as a DHCP reservation. The MAC address, and any per-network driver options, are now carried over in a normal update, in the self-update path and on rollback. MACs that Docker simply derives from the container's IP address are left alone. Tested on a real container with a fixed MAC on two networks, through an update and a rollback. Thanks @mayberryjp
+
 ## [2.0.1] — 2026-11-24
 
 ### Fixed

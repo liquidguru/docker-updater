@@ -220,6 +220,40 @@ class CarryOverHelperTests(unittest.TestCase):
     def test_unreadable_old_image_keeps_the_containers_healthcheck(self):
         self.assertEqual(self.mod._own_healthcheck(self._Client(fail=True), {"Healthcheck": self.HC}, "x"), self.HC)
 
+    # ── per-network MAC address and driver options (issue #41) ───────────────
+    def test_a_chosen_mac_is_kept(self):
+        ep = {"MacAddress": "02:00:0A:04:14:23", "IPAddress": "10.4.20.35"}
+        self.assertEqual(self.mod._chosen_mac(ep), "02:00:0a:04:14:23")
+
+    def test_a_mac_docker_derived_from_the_ip_is_not_a_choice(self):
+        ep = {"MacAddress": "02:42:ac:11:00:02", "IPAddress": "172.17.0.2"}
+        self.assertIsNone(self.mod._chosen_mac(ep))
+
+    def test_a_02_42_mac_that_does_not_match_the_ip_is_kept(self):
+        ep = {"MacAddress": "02:42:ac:11:00:99", "IPAddress": "172.17.0.2"}
+        self.assertEqual(self.mod._chosen_mac(ep), "02:42:ac:11:00:99")
+
+    def test_no_mac_or_no_ip_is_handled(self):
+        self.assertIsNone(self.mod._chosen_mac({}))
+        self.assertEqual(self.mod._chosen_mac({"MacAddress": "aa:bb:cc:dd:ee:ff"}), "aa:bb:cc:dd:ee:ff")
+
+    def test_specs_carry_mac_and_driver_options(self):
+        nets = {"vlan20": {"Aliases": ["svc", "abc123abc123"], "IPAddress": "10.4.20.35",
+                           "MacAddress": "02:00:0a:04:14:23", "DriverOpts": {"k": "v"},
+                           "IPAMConfig": {"IPv4Address": "10.4.20.35"}}}
+        spec = self.mod._network_specs(nets, "abc123abc123def")["vlan20"]
+        self.assertEqual(spec["mac_address"], "02:00:0a:04:14:23")
+        self.assertEqual(spec["driver_opt"], {"k": "v"})
+        self.assertEqual(spec["aliases"], ["svc"])
+        self.assertEqual(self.mod._endpoint_kwargs(spec), {
+            "aliases": ["svc"], "ipv4_address": "10.4.20.35", "ipv6_address": None,
+            "mac_address": "02:00:0a:04:14:23", "driver_opt": {"k": "v"}})
+
+    def test_specs_saved_by_an_older_version_still_work(self):
+        old = {"aliases": ["a"], "ipv4_address": None, "ipv6_address": None}
+        self.assertEqual(self.mod._endpoint_kwargs(old)["mac_address"], None)
+        self.assertEqual(self.mod._endpoint_kwargs(old)["driver_opt"], None)
+
 
 if __name__ == "__main__":
     unittest.main()
