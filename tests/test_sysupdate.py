@@ -138,6 +138,57 @@ def pkg(name="tzdata", to="2026f", security=False, held=False, hint=False):
             "held_back": held, "reboot_hint": hint}
 
 
+class RunsHereTests(SysBase):
+    """Which machine docker-updater itself runs on: the page warns about updating Docker only there."""
+
+    def setUp(self):
+        super().setUp()
+        self.mod._local_docker_name_cache = None
+        self.addCleanup(setattr, self.mod, "_local_docker_name_cache", None)
+
+    def test_matching_hostnames_mean_it_runs_here(self):
+        with mock.patch.object(self.mod, "_local_docker_name", return_value="LiquidDock"):
+            self.assertIs(self.mod._runs_here({"hostname": "liquiddock"}), True)
+
+    def test_a_different_hostname_means_it_does_not(self):
+        with mock.patch.object(self.mod, "_local_docker_name", return_value="liquiddock"):
+            self.assertIs(self.mod._runs_here({"hostname": "otherbox"}), False)
+
+    def test_not_knowing_either_name_gives_none(self):
+        with mock.patch.object(self.mod, "_local_docker_name", return_value=None):
+            self.assertIsNone(self.mod._runs_here({"hostname": "liquiddock"}))
+        with mock.patch.object(self.mod, "_local_docker_name", return_value="liquiddock"):
+            self.assertIsNone(self.mod._runs_here({}))
+            self.assertIsNone(self.mod._runs_here(None))
+
+    def test_the_local_name_is_read_from_docker_once_and_failures_are_not_kept(self):
+        calls = []
+
+        class FakeClient:
+            def info(self_inner):
+                calls.append(1)
+                return {"Name": "liquiddock"}
+
+        with mock.patch.object(self.mod, "get_docker_client", return_value=FakeClient()):
+            self.assertEqual(self.mod._local_docker_name(), "liquiddock")
+            self.assertEqual(self.mod._local_docker_name(), "liquiddock")
+        self.assertEqual(len(calls), 1)
+        self.mod._local_docker_name_cache = None
+        with mock.patch.object(self.mod, "get_docker_client", side_effect=RuntimeError("down")):
+            self.assertIsNone(self.mod._local_docker_name())
+        self.assertIsNone(self.mod._local_docker_name_cache)
+
+    def test_the_status_view_carries_it_for_linux_machines_only(self):
+        targets = [{"id": "a", "name": "a", "address": "u@h", "kind": "apt"},
+                   {"id": "b", "name": "b", "address": "u@h", "kind": "apt"},
+                   {"id": "n", "name": "n", "address": "u@h", "kind": "dsm"}]
+        states = {"a": {"info": {"hostname": "liquiddock"}}, "b": {"info": {"hostname": "other"}},
+                  "n": {"info": {"hostname": "liquiddock"}}}
+        with mock.patch.object(self.mod, "load_sys_targets", return_value=targets),              mock.patch.object(self.mod, "load_sys_state", side_effect=lambda i: states[i]),              mock.patch.object(self.mod, "_local_docker_name", return_value="liquiddock"):
+            view = {m["id"]: m["runs_here"] for m in self.mod._sys_view()}
+        self.assertEqual(view, {"a": True, "b": False, "n": False})
+
+
 class OffByDefaultTests(SysBase):
     def setUp(self):
         super().setUp()

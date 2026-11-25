@@ -2,6 +2,16 @@
 
 All notable changes to docker-updater are documented here.
 
+## [2.1.1] — 2026-11-25
+
+### Fixed
+- **The dashboard could stop updating itself and look stuck.** If the server answered the status request with an error, for example for a moment while Docker was restarting, the page never asked again, so a running update appeared frozen until you reloaded. It now keeps retrying.
+
+### Added
+- **A warning before updating Docker from the System tab.** Updating `docker-ce`, `containerd.io` or similar restarts Docker, which leaves docker-updater holding a Docker connection that no longer exists until its own container is restarted. The package row and the confirmation now say so, and name the command (`docker restart docker-updater`). docker-updater works out whether it runs on that machine by comparing hostnames, so the warning is definite there and not shown for your other machines; if it can't tell, it warns cautiously.
+- **A reason shown under a held-back package.** "Held back by apt" now says why in plain view: most often Ubuntu is rolling the update out in stages and it unlocks by itself within a few days.
+- **A Beta badge on the System updates setting**, since the feature is new and still being refined.
+
 ## [2.1.0] — 2026-11-25
 
 ### Added

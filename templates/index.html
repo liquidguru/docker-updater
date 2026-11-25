@@ -163,6 +163,7 @@
   .badge-ok       { background:color-mix(in srgb, var(--green) 12%, transparent);  color:var(--green);  border:1px solid color-mix(in srgb, var(--green) 25%, transparent); }
   .badge-deferred { background:color-mix(in srgb, var(--blue) 12%, transparent); color:var(--blue);   border:1px solid color-mix(in srgb, var(--blue) 25%, transparent); }
   .badge-unknown  { background:color-mix(in srgb, var(--muted) 10%, transparent); color:var(--muted);  border:1px solid var(--border); }
+  .badge-beta     { background:color-mix(in srgb, var(--accent, var(--purple)) 12%, transparent); color:var(--accent, var(--purple)); border:1px solid color-mix(in srgb, var(--accent, var(--purple)) 35%, transparent); margin-left:8px; vertical-align:middle; text-transform:uppercase; }
   .badge-updating { background:color-mix(in srgb, var(--purple) 15%, transparent); color:var(--purple); border:1px solid color-mix(in srgb, var(--purple) 30%, transparent); }
 
   .spinner { width:12px; height:12px; border:2px solid color-mix(in srgb, var(--purple) 30%, transparent); border-top-color:var(--purple); border-radius:50%; animation:spin .7s linear infinite; display:inline-block; }
@@ -653,6 +654,17 @@
     return (machines || []).reduce((n, m) => n + ((m.info && m.info.packages) ? m.info.packages.length : 0), 0);
   }
 
+  // Updating these restarts the Docker service, which leaves docker-updater (if it runs on that machine)
+  // holding a Docker socket that no longer exists, until its own container is restarted.
+  const SYS_DOCKER_PKG = /^(docker-ce|docker\.io|containerd|containerd\.io|runc)$/;
+  function sysTouchesDocker(m, names) {
+    // runs_here: true = docker-updater runs on this machine, false = it does not, null = could not tell
+    return m.kind === 'apt' && m.runs_here !== false && names.some(n => SYS_DOCKER_PKG.test(n));
+  }
+  function sysDockerNote(m) {
+    return t(m.runs_here === true ? 'sys.docker_note_here' : 'sys.docker_note');
+  }
+
   function sysPkgRowHtml(m, p) {
     const name = esc(p.name), idArg = sysArg(m.id), nameArg = sysArg(p.name);
     const badges = [
@@ -665,6 +677,8 @@
       <div class="card-info">
         <div class="card-name">${name}</div>
         <div class="card-meta">${p.from ? esc(p.from) + ' → ' + esc(p.to) : esc(p.to)}</div>
+        ${p.held_back ? `<div class="card-meta sys-held-why">${t('sys.held_why')}</div>` : ''}
+        ${(!p.held_back && sysTouchesDocker(m, [p.name])) ? `<div class="card-meta sys-docker-note">⚠️ ${sysDockerNote(m)}</div>` : ''}
       </div>
       <div class="card-actions">${badges}${m.kind !== 'apt'
         ? `<span class="sys-sub">${t(m.kind === 'windows' ? 'sys.update_in_windows' : 'sys.update_in_dsm')}</span>`
@@ -834,13 +848,16 @@
 
   async function sysUpdate(id, pkg) {
     const m = sysMachine(id); if (!m) return;
-    if (!(await showConfirm(t('confirm.sys_update_one', {name: pkg, machine: m.name})))) return;
+    const warn = sysTouchesDocker(m, [pkg]) ? '\n\n' + sysDockerNote(m) : '';
+    if (!(await showConfirm(t('confirm.sys_update_one', {name: pkg, machine: m.name}) + warn))) return;
     await sysStart(id, [pkg]);
   }
 
   async function sysUpdateAll(id, n) {
     const m = sysMachine(id); if (!m) return;
-    if (!(await showConfirm(t('confirm.sys_update_all', {n, machine: m.name})))) return;
+    const names = ((m.info && m.info.packages) || []).filter(p => !p.held_back).map(p => p.name);
+    const warn = sysTouchesDocker(m, names) ? '\n\n' + sysDockerNote(m) : '';
+    if (!(await showConfirm(t('confirm.sys_update_all', {n, machine: m.name}) + warn))) return;
     await sysStart(id, 'all');
   }
 
@@ -1096,7 +1113,7 @@
       <div class="settings-card">
         <div class="setting-row">
           <div>
-            <div class="setting-label">${t('settings.system_label')}</div>
+            <div class="setting-label">${t('settings.system_label')}<span class="badge-status badge-beta" title="${esc(t('settings.beta_title'))}">${t('settings.beta')}</span></div>
             <div class="setting-desc">${t('settings.system_desc')}</div>
           </div>
           <label class="toggle">
@@ -1608,7 +1625,11 @@
     try {
       const r = await fetch('/api/status');
       const data = await r.json();
-      if (data.error) return;
+      if (data.error) {            // e.g. the server could not reach Docker for a moment: try again, never go quiet
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(fetchStatus, 10000);
+        return;
+      }
       allContainers = data.containers || [];
       allHosts      = data.hosts || [];
       multiHost     = allHosts.length > 1;

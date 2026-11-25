@@ -119,7 +119,24 @@ out.tabs = {
   onEmpty:    tabState([], 'update'),
   onViewing:  tabState([machine({})], 'system'),
 };
-console.log(JSON.stringify(out));
+out.docker = sysMachineHtml(machine({}, {packages: [pkg({name: 'docker-ce'}), pkg({name: 'curl'}),
+  pkg({name: 'containerd.io', held_back: true})]}), null);
+out.dockerHere = sysMachineHtml(machine({runs_here: true}, {packages: [pkg({name: 'docker-ce'})]}), null);
+out.dockerElsewhere = sysMachineHtml(machine({runs_here: false}, {packages: [pkg({name: 'docker-ce'})]}), null);
+out.dockerUnknown = sysMachineHtml(machine({runs_here: null}, {packages: [pkg({name: 'docker-ce'})]}), null);
+out.dockerNas = sysMachineHtml(machine({kind: 'dsm'}, {os: 'DSM 7', kernel: '', packages: [pkg({name: 'docker-ce'})]}), null);
+out.confirms = [];
+globalThis.showConfirm = async (m) => { out.confirms.push(m); return false; };
+(async () => {
+  allSystem = [machine({}, {packages: [pkg({name: 'docker-ce'}), pkg({name: 'curl'}),
+    pkg({name: 'containerd.io', held_back: true})]})];
+  await sysUpdate('dock', 'docker-ce');
+  await sysUpdate('dock', 'curl');
+  await sysUpdateAll('dock', 2);
+  allSystem = [machine({}, {packages: [pkg({name: 'curl'}), pkg({name: 'runc', held_back: true})]})];
+  await sysUpdateAll('dock', 1);
+  console.log(JSON.stringify(out));
+})();
 """
 
 
@@ -133,7 +150,11 @@ class SystemUpdatesUiTests(unittest.TestCase):
                 _extract(r"  function timeAgo\(iso\) \{.*?\n  \}\n"),
                 _extract(r"  function esc\(s\) \{.*?\n  \}\n"),
             ]),
-            "block": _extract(r"// <system-updates>.*?// </system-updates>"),
+            "block": (_extract(r"// <system-updates>.*?// </system-updates>") + "\n"
+              + _extract(r"  function sysMachine\(id\) \{[^\n]*\n") + "\n"
+              + _extract(r"  async function sysUpdate\(id, pkg\) \{.*?\n  \}\n") + "\n"
+              + _extract(r"  async function sysUpdateAll\(id, n\) \{.*?\n  \}\n") + "\n"
+              + "async function sysStart() {}"),
             "tabcounts": _extract(r"  function updateTabCounts\(containers, hosts\) \{.*?\n  \}\n"),
         }
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
@@ -176,6 +197,36 @@ class SystemUpdatesUiTests(unittest.TestCase):
         row = re.search(r"<div class=\"container-card.*?libheld.*?</div>\s*</div>\s*</div>", html, re.S)
         assert row
         self.assertRegex(row.group(0), r"<button class=\"btn-primary btn-sm\" disabled")
+
+    def test_a_held_back_package_says_why_in_plain_view(self):
+        html = self.out["pending"]
+        self.assertEqual(html.count("Held back by apt."), 1, "only the held package gets the note")
+        self.assertIn("rolling this update out in stages", html)
+        self.assertIn("sys-held-why", html)
+
+    def test_updating_docker_itself_warns_that_docker_restarts(self):
+        html = self.out["docker"]
+        self.assertEqual(html.count("Updating this restarts Docker"), 1, "only the installable Docker package")
+        row = re.search(r"<div class=\"container-card.*?docker-ce.*?sys-docker-note.*?</div>", html, re.S)
+        self.assertIsNotNone(row, "the note belongs under docker-ce")
+        self.assertNotIn("sys-docker-note", self.out["dockerNas"], "read-only machines are not asked to restart anything")
+
+    def test_the_warning_is_exact_only_where_docker_updater_runs(self):
+        here = self.out["dockerHere"]
+        self.assertIn("docker-updater runs on this machine", here)
+        self.assertNotIn("If docker-updater runs there", here)
+        self.assertNotIn("sys-docker-note", self.out["dockerElsewhere"],
+                         "another machine's Docker update does not affect docker-updater")
+        self.assertIn("If docker-updater runs there", self.out["dockerUnknown"],
+                      "when it cannot be told, warn cautiously")
+
+    def test_the_confirmation_repeats_the_warning_only_when_docker_is_involved(self):
+        one_docker, one_plain, all_with_docker, all_plain = self.out["confirms"]
+        self.assertIn("restarts Docker", one_docker)
+        self.assertIn("docker restart docker-updater", one_docker)
+        self.assertNotIn("restarts Docker", one_plain)
+        self.assertIn("restarts Docker", all_with_docker)
+        self.assertNotIn("restarts Docker", all_plain, "a held-back Docker package is not installed, so no warning")
 
     def test_update_all_counts_only_what_can_be_installed(self):
         self.assertIn("Update all (2)", self.out["pending"])
@@ -513,6 +564,39 @@ class CheckBannerTests(unittest.TestCase):
         self.assertFalse(self.o["sysIdle"]["disabled"], "a container scan must not lock the System button")
         self.assertFalse(self.o["dockIdle"]["disabled"], "a system check must not lock the Docker button")
         self.assertEqual(self.o["hostsTab"]["label"], "Check Docker Now")
+
+
+class StatusPollingTests(unittest.TestCase):
+    """The page must keep polling after the server answers with an error."""
+
+    def test_an_error_answer_schedules_another_poll(self):
+        fn = _extract(r"  async function fetchStatus\(\) \{.*?\n  \}\n")
+        script = """
+const timers = [];
+let refreshTimer = null;
+const setTimeout = (f, ms) => { timers.push(ms); return timers.length; };
+const clearTimeout = () => {};
+const fetch = async () => ({ json: async () => ({ error: 'docker unreachable' }) });
+%s
+(async () => { await fetchStatus(); console.log(JSON.stringify(timers)); })();
+""" % fn
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(script)
+            path = f.name
+        try:
+            r = subprocess.run(["node", path], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), [10000], "an error answer must retry, not stop polling")
+
+
+class BetaBadgeTests(unittest.TestCase):
+    def test_the_system_setting_is_marked_beta_in_both_languages(self):
+        self.assertIn("badge-beta", INDEX)
+        for lang in ("en", "zh-CN"):
+            self.assertTrue(CATALOG[lang]["settings.beta"].strip())
+            self.assertTrue(CATALOG[lang]["settings.beta_title"].strip())
 
 
 if __name__ == "__main__":

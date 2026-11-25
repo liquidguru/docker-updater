@@ -73,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "2.1.0"
+APP_VERSION          = "2.1.1"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -2424,6 +2424,35 @@ def start_system_check(notify: bool = False) -> threading.Thread:
     return t
 
 
+_local_docker_name_cache: str | None = None
+
+
+def _local_docker_name() -> str | None:
+    """The hostname of the machine whose Docker docker-updater is using, i.e. the
+    machine it runs on. Only a successful answer is kept; None if it cannot be read."""
+    global _local_docker_name_cache
+    if _local_docker_name_cache:
+        return _local_docker_name_cache
+    try:
+        name = get_docker_client(timeout=5).info().get("Name")
+    except Exception:
+        return None
+    if isinstance(name, str) and name:
+        _local_docker_name_cache = name
+        return name
+    return None
+
+
+def _runs_here(info: dict | None) -> bool | None:
+    """Is this the machine docker-updater itself runs on? True/False, or None when it cannot be told.
+    The page uses it to warn only where updating Docker would cut docker-updater off from Docker."""
+    host = (info or {}).get("hostname")
+    local = _local_docker_name()
+    if not host or not local:
+        return None
+    return host.strip().lower() == local.strip().lower()
+
+
 def _sys_view() -> list:
     """What /api/status reports for the System tab."""
     out = []
@@ -2434,7 +2463,8 @@ def _sys_view() -> list:
         out.append({"id": t["id"], "name": t["name"], "address": t["address"], "kind": t.get("kind", "apt"),
                     "status": st.get("status", "unknown"), "last_check": st.get("last_check"),
                     "last_error": st.get("last_error"), "info": st.get("info"),
-                    "updating": t["id"] in running})
+                    "updating": t["id"] in running,
+                    "runs_here": _runs_here(st.get("info")) if t.get("kind", "apt") == "apt" else False})
     return out
 
 
