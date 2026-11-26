@@ -917,7 +917,9 @@ class StaleContainerDetectionTests(SafetyTestBase):
                         self.assertEqual(found[c.name]["unchecked_reason"], "no_registry_digest")
                         self.assertFalse(found[c.name]["has_update"])
                     else:
-                        self.assertNotIn(c.name, found)
+                        # kept, or a remote dashboard would lose the container
+                        self.assertEqual(found[c.name]["unchecked_reason"], "lookup_failed")
+                        self.assertFalse(found[c.name]["has_update"])
                 else:
                     self.assertEqual(found[c.name]["has_update"],
                                      remote != c.image.attrs["Id"])

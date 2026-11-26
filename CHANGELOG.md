@@ -2,6 +2,16 @@
 
 All notable changes to docker-updater are documented here.
 
+## [2.1.2] — 2026-11-27
+
+### Fixed
+- **An updated container showed as "Not Checked" until the next check.** On the local host, updating a container threw its check result away, so it moved to **Unchecked** straight after a successful update. It is now marked **Up to date**, on every host.
+- **A container could vanish from a remote host.** If the registry lookup returned nothing, for example for an image built on that machine, the container appeared on no tab. It is now listed under **Unchecked**.
+- **A rolled-back container on a remote host still said "Up to date".** It now shows as unchecked, with the reason, until the next check.
+
+### Changed
+- **Unchecked says why.** Containers pinned to an exact image digest (`image@sha256:…`) are labelled **Pinned**, and no registry lookup is made for them. Others say whether the image was not found in the registry (built locally, or private), the registry's rate limit was reached, the lookup failed, the local image could not be read, or the container was rolled back. Run **Check Now** once after upgrading to fill the reasons in.
+
 ## [2.1.1] — 2026-11-25
 
 ### Fixed

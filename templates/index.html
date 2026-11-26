@@ -1764,7 +1764,7 @@
       update:   `<span class="badge-status badge-update">${t('badge.update')}</span>`,
       ok:       `<span class="badge-status badge-ok">${t('badge.ok')}</span>`,
       deferred: `<span class="badge-status badge-deferred">${t('badge.deferred', {until: c.defer_until})}</span>`,
-      unknown:  `<span class="badge-status badge-unknown">${t('badge.unknown')}</span>`,
+      unknown:  `<span class="badge-status badge-unknown">${t(c.unchecked_reason === 'pinned_digest' ? 'badge.pinned' : 'badge.unknown')}</span>`,
     };
     const isUpdating  = c.updating;
     const statusClass = isUpdating ? 'updating' : `status-${c.status}`;
@@ -1773,8 +1773,11 @@
     const badge = isUpdating
       ? `<span class="badge-status badge-updating"><span class="spinner"></span> ${t('badge.updating')}</span>`
       : (statusMap[c.status] || '');
-    const checkedAt = c.unchecked_reason === 'no_registry_digest'
-      ? t('card.no_registry_digest')
+    const reasonKey = ['no_registry_digest', 'pinned_digest', 'not_found', 'rate_limited',
+      'lookup_failed', 'no_local_image', 'rolled_back'].includes(c.unchecked_reason)
+      ? `card.${c.unchecked_reason}` : null;
+    const checkedAt = reasonKey
+      ? t(reasonKey)
       : c.checked_at ? t('card.checked', {when: timeAgo(c.checked_at)}) : t('card.not_checked');
     // Image size (#24): on-disk size of the running image, plus the compressed
     // download size of the pending update when one is known. Different units,

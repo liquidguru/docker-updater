@@ -73,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "2.1.1"
+APP_VERSION          = "2.1.2"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1003,6 +1003,32 @@ def _do_stack_restart(client, host_id: str, project: str, key: str) -> None:
         print(f"[stack-restart:{host_id}] {project}: enumerate failed: {e}", flush=True)
 
 
+def _mark_current(store: dict, name: str) -> None:
+    """A successful update pulled the tag, so the container now matches it. The
+    entry is updated, not dropped: dropping it showed the container as unchecked
+    until the next scan, and made a remote one vanish (issue #28)."""
+    entry = (store.get("available") or {}).get(name)
+    if not entry:
+        return
+    entry["has_update"] = False
+    if entry.get("remote_digest"):
+        entry.pop("unchecked_reason", None)
+        entry["local_digest"] = entry["remote_digest"]
+        entry["checked_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+        for k in ("remote_size", "download_size", "layers_total", "layers_present"):
+            entry[k] = None
+
+
+def _mark_rolled_back(store: dict, name: str) -> None:
+    """The container runs its older image again, so the last result no longer
+    describes it. The next check does."""
+    entry = (store.get("available") or {}).get(name)
+    if not entry:
+        return
+    entry.update(has_update=False, unchecked_reason="rolled_back", checked_at=None,
+                 download_size=None)
+
+
 def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | None) -> None:
     """Write history + rollback entry to state.json from the self-update helper.
     Only meaningful when /app/data is mounted in the helper container."""
@@ -1011,7 +1037,9 @@ def _helper_write_state(name: str, history_entry: dict, rollback_entry: dict | N
         return
     try:
         state = load_state()
-        state["available"].pop(name, None)
+        # A failed self-update restored the old container: its result still holds.
+        if history_entry.get("status") == "success":
+            _mark_current(state, name)
         state.setdefault("history", []).insert(0, history_entry)
         state["history"] = state["history"][:50]
         if rollback_entry:
@@ -1556,12 +1584,23 @@ def _note_rate_limit(registry: str, response) -> None:
         pass
 
 
+# Why the last registry lookup for an image gave nothing, so the dashboard can say
+# more than "Not Checked".
+_lookup_failures: dict[str, str] = {}
+
+
+def _is_digest_pinned(image_name: str | None) -> bool:
+    """`repo@sha256:...` names one exact image, so there is no newer one to find."""
+    return "@" in (image_name or "")
+
+
 def get_remote_digest(
     image_name: str,
     local_digest: str | None = None,
     local_image_id: str | None = None,
     local_platform: dict | None = None,
 ) -> str | None:
+    _lookup_failures.pop(image_name, None)
     try:
         registry, repo, tag = parse_image(image_name)
         url = f"https://{registry}/v2/{repo}/manifests/{tag}"
@@ -1576,6 +1615,7 @@ def get_remote_digest(
             r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
         _note_rate_limit(registry, r)
         if r.status_code == 429:
+            _lookup_failures[image_name] = "rate_limited"
             print(f"[registry] {registry}: rate limited (HTTP 429) checking "
                   f"{image_name}. Set DOCKERHUB_USERNAME/DOCKERHUB_TOKEN to "
                   f"authenticate and raise the limit.")
@@ -1608,6 +1648,8 @@ def get_remote_digest(
                 except Exception:
                     pass
             return remote
+        if r.status_code in (401, 403, 404):
+            _lookup_failures[image_name] = "not_found"
     except Exception as e:
         print(f"[checker] registry error for {image_name}: {e}")
     return None
@@ -1869,18 +1911,26 @@ def _scan_host(client, host_id: str) -> dict:
             continue  # skip helper containers created by docker-updater
         image_name = container.attrs["Config"]["Image"]
         local_build = is_locally_built(container)
-        if local_build:
-            # Remote dashboards only have the cached scan, so retain unchecked
-            # containers even when registry lookups are disabled or fail.
-            available[name] = {
+
+        def unchecked(reason: str) -> dict:
+            # Remote dashboards only have the cached scan, so a container that
+            # can't be checked still needs an entry or it vanishes from them.
+            return {
                 "image": image_name,
                 "has_update": False,
-                "locally_built": True,
-                "unchecked_reason": "no_registry_digest",
+                "locally_built": local_build,
+                "unchecked_reason": reason,
                 "checked_at": None,
                 "compose_project": (container.labels or {}).get("com.docker.compose.project"),
                 "image_size": get_local_image_size(container),
             }
+
+        if _is_digest_pinned(image_name):
+            available[name] = unchecked("pinned_digest")
+            print(f"[checker:{host_id}] {name}: [pinned]")
+            continue
+        if local_build:
+            available[name] = unchecked("no_registry_digest")
         if local_build and not check_without_digest:
             continue
         local_platform = get_local_platform(container)
@@ -1899,8 +1949,8 @@ def _scan_host(client, host_id: str) -> dict:
 
         if not local_digest:
             # Nothing to compare against. Saying "ok" here claimed the container
-            # was up to date on no evidence; leaving it out of `available` puts
-            # it in the Not checked tab, which is the honest answer.
+            # was up to date on no evidence; the Unchecked tab is the honest answer.
+            available.setdefault(name, unchecked("no_local_image"))
             print(f"[checker:{host_id}] {name}: [unknown] could not read the local "
                   f"image for {image_name} — is it still present on this host?")
             continue
@@ -1908,7 +1958,11 @@ def _scan_host(client, host_id: str) -> dict:
         has_update = bool(remote_digest and local_digest != remote_digest)
         flag = "UPDATE" if has_update else ("no digest" if not remote_digest else "ok")
         print(f"[checker:{host_id}] {name}: [{flag}]")
-        if remote_digest:
+        if not remote_digest:
+            # An imported or local image keeps its "no registry digest" entry.
+            available.setdefault(
+                name, unchecked(_lookup_failures.get(image_name, "lookup_failed")))
+        else:
             # The download size costs a manifest GET (which Docker Hub counts
             # against the pull rate limit), so only look it up when there is
             # actually something to download (#24). The layer breakdown adds one
@@ -3375,7 +3429,7 @@ def apply_update(container_name: str, host_id: str = "local",
         if host_id == "local":
             with _state_lock:
                 state = load_state()
-                state["available"].pop(container_name, None)
+                _mark_current(state, container_name)
                 state["history"].insert(0, history_entry)
                 state["history"] = state["history"][:50]
                 if rollback_entry:
@@ -3385,15 +3439,7 @@ def apply_update(container_name: str, host_id: str = "local",
                 save_state(state)
         else:
             hs = load_host_state(host_id)
-            # Mark it current rather than dropping it. A local card is built
-            # from the live container list, but a remote card only exists while
-            # the container is in `available` — popping it made an updated
-            # remote container vanish until the next check, taking its Rollback
-            # and Delete-backup buttons with it (issue #28).
-            _entry = hs.setdefault("available", {}).get(container_name)
-            if _entry:
-                _entry["has_update"] = False
-                _entry["local_digest"] = _entry.get("remote_digest")
+            _mark_current(hs, container_name)
             hs.setdefault("history", []).insert(0, history_entry)
             hs["history"] = hs["history"][:50]
             if rollback_entry:
@@ -3676,6 +3722,7 @@ def apply_rollback(container_name: str, host_id: str = "local",
         if host_id == "local":
             with _state_lock:
                 state = load_state()
+                _mark_rolled_back(state, container_name)
                 if _kept_entry:
                     state.setdefault("rollbacks", {})[container_name] = _kept_entry
                 else:
@@ -3685,6 +3732,7 @@ def apply_rollback(container_name: str, host_id: str = "local",
                 save_state(state)
         else:
             hs = load_host_state(host_id)
+            _mark_rolled_back(hs, container_name)
             if _kept_entry:
                 hs.setdefault("rollbacks", {})[container_name] = _kept_entry
             else:
@@ -4029,7 +4077,9 @@ def api_status():
             image_name = container.attrs["Config"]["Image"]
             info  = state["available"].get(name, {})
             unchecked_reason = (
-                "no_registry_digest" if not check_without_digest and is_locally_built(container)
+                "pinned_digest" if _is_digest_pinned(image_name)
+                else "no_registry_digest"
+                if not check_without_digest and is_locally_built(container)
                 else info.get("unchecked_reason")
             )
             defer = state["deferred"].get(name)
@@ -4108,7 +4158,9 @@ def api_status():
 
         for cname, cinfo in hs.get("available", {}).items():
             unchecked_reason = (
-                "no_registry_digest" if cinfo.get("locally_built") and not check_without_digest
+                "pinned_digest" if _is_digest_pinned(cinfo.get("image"))
+                else "no_registry_digest"
+                if cinfo.get("locally_built") and not check_without_digest
                 else cinfo.get("unchecked_reason")
             )
             defer = h_deferred.get(cname)
