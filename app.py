@@ -73,7 +73,7 @@ def _load_or_create_secret_key() -> str:
 
 # DATA_DIR is defined below; secret key applied after constants.
 
-APP_VERSION          = "2.1.2"
+APP_VERSION          = "2.1.3"
 # Dashboard themes. Keep in sync with the [data-theme="..."] blocks in
 # templates/index.html — an unknown value falls back to DEFAULT_THEME.
 THEMES               = ["github", "midnight", "nord", "dracula", "carbon", "light"]
@@ -1006,7 +1006,11 @@ def _do_stack_restart(client, host_id: str, project: str, key: str) -> None:
 def _mark_current(store: dict, name: str) -> None:
     """A successful update pulled the tag, so the container now matches it. The
     entry is updated, not dropped: dropping it showed the container as unchecked
-    until the next scan, and made a remote one vanish (issue #28)."""
+    until the next scan, and made a remote one vanish (issue #28).
+
+    A deferral was about the update just installed, so it goes too: left in place
+    it kept the container under Deferred and silenced newer updates."""
+    (store.get("deferred") or {}).pop(name, None)
     entry = (store.get("available") or {}).get(name)
     if not entry:
         return

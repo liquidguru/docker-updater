@@ -2,6 +2,11 @@
 
 All notable changes to docker-updater are documented here.
 
+## [2.1.3] — 2026-11-27
+
+### Fixed
+- **Updating a deferred container left it deferred.** After **Update Now** it stayed under **Deferred** until the deferral ran out, and its newer updates were not announced in the meantime. A successful update now removes the deferral, on every host. A failed update keeps it. If a container is already stuck this way, press **Undefer** once.
+
 ## [2.1.2] — 2026-11-27
 
 ### Fixed

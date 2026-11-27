@@ -134,6 +134,36 @@ class AfterUpdateTests(SafetyTestBase):
         self.assertNotEqual(entry["checked_at"], "2026-01-01T00:00:00Z")
         self.assertIsNone(entry["download_size"])
 
+    def test_updating_a_deferred_container_ends_the_deferral(self):
+        d = FakeDocker(self.mod)
+        d.new("web")
+        self.state["available"]["web"] = _result()
+        self.state["deferred"] = {"web": {"until": "2999-01-01"},
+                                  "other": {"until": "2999-01-01"}}
+        d.api.pull.return_value = iter([{"status": "Pulling from library/web"}])
+
+        def create(**kw):
+            d.new("web", health="healthy")
+            return {"Id": "cid-web"}
+
+        d.api.create_container.side_effect = create
+        self._run(self.mod.apply_update, d, "web", "local", reserved=True)
+        self.assertEqual(self.state["history"][0]["status"], "success", self._logs())
+        self.assertEqual(list(self.state["deferred"]), ["other"])
+
+    def test_failed_update_keeps_the_deferral(self):
+        d = FakeDocker(self.mod)
+        d.new("web")
+        self.state["deferred"] = {"web": {"until": "2999-01-01"}}
+        d.api.pull.return_value = iter([{"error": "unauthorized"}])
+        self._run(self.mod.apply_update, d, "web", "local", reserved=True)
+        self.assertIn("web", self.state["deferred"])
+
+    def test_deferral_ends_even_without_a_check_result(self):
+        store = {"available": {}, "deferred": {"web": {"until": "2999-01-01"}}}
+        self.mod._mark_current(store, "web")
+        self.assertEqual(store["deferred"], {})
+
     def test_self_update_success_and_failure(self):
         mod = self.mod
         for status, has_update in (("success", False), ("error: boom", True)):
